@@ -133,6 +133,11 @@ Endpoints:
 - `GET /api/v1/admin/inventory`
 - `GET /api/v1/admin/inventory-adjustments?limit=500`
 - `GET /api/v1/admin/financial-report`
+- `GET /api/v1/admin/zoho/status`
+- `GET /api/v1/admin/zoho/orders?limit=500`
+- `POST /api/v1/admin/zoho/test`
+- `POST /api/v1/admin/zoho/sync`
+- `POST /api/v1/admin/zoho/orders/sync`
 
 Update a physical inventory count:
 
@@ -152,6 +157,14 @@ Set `stockOnHand` to `null` to stop enforcing inventory for that format. The pub
 
 The financial report separates gross sales, product sales, shipping collected, tax collected, refunds, and net collected by currency. `netCollected` is before Stripe fees, fulfillment costs, and operating expenses; it is not an accounting profit figure.
 
+### Zoho Inventory bridge
+
+`GET /api/v1/admin/zoho/status` reports configuration readiness, masked organization information, the Zoho data center, Liberia and U.S. locations, SKU mappings, last synchronization, and paid-order outbox counts. It never returns an OAuth credential.
+
+`POST /api/v1/admin/zoho/test` validates OAuth, configured location IDs, and exact SKU mappings without changing checkout inventory. `POST /api/v1/admin/zoho/sync` pulls the latest location quantities. When `ZOHO_INVENTORY_ENABLED=false`, the pull is a readiness preview; when enabled and all mappings pass, the U.S. location's sellable quantity becomes authoritative for checkout.
+
+Signed paid Stripe events enter a persistent Zoho outbox. `POST /api/v1/admin/zoho/orders/sync` retries pending or failed exports. `GET /api/v1/admin/zoho/orders` returns the private outbox status and Zoho sales-order IDs. Zoho writes are idempotent by the customer-facing `SR-...` order number.
+
 The browser dashboard at `/admin` uses these endpoints. The key is held in `sessionStorage`, not persistent browser storage.
 
 ## Limits and privacy
@@ -161,6 +174,7 @@ The browser dashboard at `/admin` uses these endpoints. The key is held in `sess
 - Honeypot submissions are accepted without storing their content.
 - Admin data is never returned by public endpoints.
 - Stripe secret and restricted keys never reach browser code or API responses.
+- Zoho OAuth credentials never reach browser code, API responses, logs, or the data store.
 - Checkout amounts come from configured Stripe Price IDs, not request data.
 - Automatic tax is intentionally off until applicable Stripe Tax registrations are confirmed.
 - The storage file is created with owner-only permissions and should live on a Railway volume mounted at `/data`.

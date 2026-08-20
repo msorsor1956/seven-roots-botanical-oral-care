@@ -8,6 +8,7 @@ import { formats, formatBySlug } from "./catalog.js";
 import { createPayments, PaymentConfigurationError } from "./payments.js";
 import { InventoryError, JsonStore } from "./store.js";
 import { validateInquiry, validateWaitlist } from "./validation.js";
+import { createZohoInventory, ZohoApiError, ZohoConfigurationError } from "./zoho.js";
 
 const serverDir = path.dirname(fileURLToPath(import.meta.url));
 const defaultRoot = path.resolve(serverDir, "..");
@@ -157,8 +158,46 @@ export async function createApplication(options = {}) {
     .split(",").map((origin) => origin.trim()).filter(Boolean);
   const store = options.store || await new JsonStore(dataDir).init();
   const payments = options.payments || createPayments(options.paymentOptions);
+  const zoho = options.zoho || createZohoInventory(options.zohoOptions);
   const writeLimiter = createRateLimiter({ windowMs: 15 * 60 * 1000, max: 20 });
   const checkoutLimiter = createRateLimiter({ windowMs: 15 * 60 * 1000, max: 8 });
+  const connectorLimiter = createRateLimiter({ windowMs: 15 * 60 * 1000, max: 12 });
+  let zohoProcessing = false;
+
+  const processZohoOutbox = async (limit = 25) => {
+    if (!zoho.active || !store.zohoSyncState().inventoryAuthority || zohoProcessing) {
+      return { processed: 0, synced: 0, failed: 0, skipped: true };
+    }
+    zohoProcessing = true;
+    let synced = 0;
+    let failed = 0;
+    try {
+      const pending = store.pendingZohoOrders(limit);
+      for (const task of pending) {
+        if (!task.order || !task.mapping?.zohoItemId) {
+          await store.markZohoOrderFailed(task.entry.orderId, new Error("The paid order has no verified Zoho SKU mapping."));
+          failed += 1;
+          continue;
+        }
+        try {
+          const result = await zoho.createPaidSalesOrder(task.order, task.mapping);
+          await store.markZohoOrderSynced(task.entry.orderId, result);
+          synced += 1;
+        } catch (error) {
+          await store.markZohoOrderFailed(task.entry.orderId, error);
+          failed += 1;
+        }
+      }
+      return { processed: synced + failed, synced, failed, skipped: false };
+    } finally {
+      zohoProcessing = false;
+    }
+  };
+
+  const retryTimer = setInterval(() => {
+    void processZohoOutbox(10).catch((error) => console.error("Zoho order sync:", error?.message || "failed"));
+  }, 5 * 60 * 1000);
+  retryTimer.unref();
 
   const server = http.createServer(async (request, response) => {
     const suppliedRequestId = typeof request.headers["x-request-id"] === "string" ? request.headers["x-request-id"].trim() : "";
@@ -201,9 +240,10 @@ export async function createApplication(options = {}) {
         sendJson(response, 200, {
           status: "ok",
           service: "seven-roots-api",
-          version: "1.3.0",
+          version: "1.4.0",
           storage: "file",
-          payments: payments.configured ? "ready" : "configuration_required"
+          payments: payments.configured ? "ready" : "configuration_required",
+          inventoryIntegration: zoho.active ? "zoho_enabled" : "local"
         });
         return;
       }
@@ -279,6 +319,9 @@ export async function createApplication(options = {}) {
         }
         const result = await store.applyStripeEvent(event);
         sendJson(response, 200, { received: true, duplicate: result.duplicate });
+        if (!result.duplicate && result.order?.status === "paid") {
+          void processZohoOutbox(5).catch((error) => console.error("Zoho order sync:", error?.message || "failed"));
+        }
         return;
       }
 
@@ -351,6 +394,56 @@ export async function createApplication(options = {}) {
           sendJson(response, 200, { data: store.list("inventoryAdjustments", url.searchParams.get("limit")) });
           return;
         }
+        if (request.method === "GET" && pathname === "/api/v1/admin/zoho/status") {
+          sendJson(response, 200, { data: zoho.status(store.zohoSyncState()) });
+          return;
+        }
+        if (request.method === "GET" && pathname === "/api/v1/admin/zoho/orders") {
+          sendJson(response, 200, { data: store.zohoOrderReport(url.searchParams.get("limit")) });
+          return;
+        }
+        if (request.method === "POST" && pathname === "/api/v1/admin/zoho/test") {
+          const rate = connectorLimiter(request);
+          if (!rate.allowed) throw new HttpError(429, "rate_limited", "Too many Zoho connection attempts. Try again later.", { retryAfter: rate.retryAfter });
+          try {
+            const inspection = await zoho.testConnection(formats);
+            const syncState = await store.recordZohoTest(inspection);
+            sendJson(response, 200, {
+              data: zoho.status(syncState),
+              message: inspection.ready ? "Zoho connection and SKU mappings are verified." : "Zoho connected, but one or more SKU or location mappings need attention."
+            });
+          } catch (error) {
+            await store.recordZohoFailure(error);
+            throw error;
+          }
+          return;
+        }
+        if (request.method === "POST" && pathname === "/api/v1/admin/zoho/sync") {
+          const rate = connectorLimiter(request);
+          if (!rate.allowed) throw new HttpError(429, "rate_limited", "Too many Zoho synchronization attempts. Try again later.", { retryAfter: rate.retryAfter });
+          try {
+            const result = await zoho.syncCatalog(formats);
+            const syncState = await store.applyZohoSync(result);
+            sendJson(response, 200, {
+              data: zoho.status(syncState),
+              message: result.activate ? "Zoho now controls U.S. checkout inventory." : "Zoho inventory was verified in readiness mode; checkout stock was not changed."
+            });
+          } catch (error) {
+            await store.recordZohoFailure(error);
+            throw error;
+          }
+          return;
+        }
+        if (request.method === "POST" && pathname === "/api/v1/admin/zoho/orders/sync") {
+          const rate = connectorLimiter(request);
+          if (!rate.allowed) throw new HttpError(429, "rate_limited", "Too many Zoho synchronization attempts. Try again later.", { retryAfter: rate.retryAfter });
+          const result = await processZohoOutbox(100);
+          sendJson(response, 200, {
+            data: { ...result, status: zoho.status(store.zohoSyncState()) },
+            message: result.skipped ? "Zoho write-back is waiting for a verified, enabled connection." : `${result.synced} paid order${result.synced === 1 ? "" : "s"} synchronized.`
+          });
+          return;
+        }
         if (request.method === "PATCH" && pathname.startsWith("/api/v1/admin/inventory/")) {
           const formatSlug = pathname.slice("/api/v1/admin/inventory/".length);
           if (!formatBySlug.has(formatSlug)) throw new HttpError(404, "format_not_found", "Product format not found.");
@@ -386,19 +479,29 @@ export async function createApplication(options = {}) {
       throw new HttpError(405, "method_not_allowed", "Method not allowed.");
     } catch (error) {
       const inventoryError = error instanceof InventoryError;
-      const status = error instanceof HttpError ? error.status : inventoryError ? 409 : 500;
+      const zohoError = error instanceof ZohoConfigurationError || error instanceof ZohoApiError;
+      const status = error instanceof HttpError
+        ? error.status
+        : inventoryError
+          ? 409
+          : error instanceof ZohoConfigurationError
+            ? 503
+            : error instanceof ZohoApiError
+              ? 502
+              : 500;
       if (status === 500) console.error(`[${requestId}]`, error);
       if (error?.details?.retryAfter) response.setHeader("Retry-After", String(error.details.retryAfter));
       sendJson(response, status, {
         error: {
-          code: error instanceof HttpError || inventoryError ? error.code : "internal_error",
-          message: error instanceof HttpError || inventoryError ? error.message : "The server could not complete this request.",
+          code: error instanceof HttpError || inventoryError || zohoError ? error.code : "internal_error",
+          message: error instanceof HttpError || inventoryError || zohoError ? error.message : "The server could not complete this request.",
           ...((error instanceof HttpError || inventoryError) && error.details ? { details: error.details } : {}),
+          ...(error instanceof ZohoConfigurationError && error.missing.length ? { details: { missingSettings: error.missing } } : {}),
           requestId
         }
       });
     }
   });
 
-  return { server, store, payments };
+  return { server, store, payments, zoho, processZohoOutbox };
 }

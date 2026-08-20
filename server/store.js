@@ -3,9 +3,10 @@ import path from "node:path";
 import { randomUUID } from "node:crypto";
 import { formats } from "./catalog.js";
 
-const DATA_VERSION = 3;
+const DATA_VERSION = 4;
 const MAX_STORED_EVENTS = 2000;
 const MAX_STORED_RESERVATIONS = 5000;
+const MAX_ZOHO_QUEUE = 5000;
 const RESERVATION_MAX_AGE_MS = 31 * 60 * 60 * 1000;
 const paidStatuses = new Set(["paid", "partially_refunded", "refunded"]);
 
@@ -18,6 +19,19 @@ const emptyData = () => ({
   inventory: [],
   inventoryReservations: [],
   inventoryAdjustments: [],
+  zohoOrderQueue: [],
+  zohoSync: {
+    status: "not_configured",
+    inventoryAuthority: false,
+    lastAttemptAt: null,
+    lastConnectedAt: null,
+    lastSuccessAt: null,
+    lastError: "",
+    liberiaLocation: null,
+    usLocation: null,
+    onlineCustomer: null,
+    mappings: []
+  },
   stripeEvents: []
 });
 
@@ -58,9 +72,9 @@ const monthKey = (value) => {
 };
 
 export class InventoryError extends Error {
-  constructor(message, details = {}) {
+  constructor(message, details = {}, code = "insufficient_inventory") {
     super(message);
-    this.code = "insufficient_inventory";
+    this.code = code;
     this.details = details;
   }
 }
@@ -89,6 +103,10 @@ export class JsonStore {
         inventory: Array.isArray(saved.inventory) ? saved.inventory : [],
         inventoryReservations: Array.isArray(saved.inventoryReservations) ? saved.inventoryReservations : [],
         inventoryAdjustments: Array.isArray(saved.inventoryAdjustments) ? saved.inventoryAdjustments : [],
+        zohoOrderQueue: Array.isArray(saved.zohoOrderQueue) ? saved.zohoOrderQueue : [],
+        zohoSync: saved.zohoSync && typeof saved.zohoSync === "object"
+          ? { ...emptyData().zohoSync, ...saved.zohoSync }
+          : emptyData().zohoSync,
         stripeEvents: Array.isArray(saved.stripeEvents) ? saved.stripeEvents.slice(0, MAX_STORED_EVENTS) : []
       };
       needsPersist = savedVersion !== DATA_VERSION;
@@ -110,6 +128,10 @@ export class JsonStore {
           sku: format.sku,
           stockOnHand: null,
           reorderLevel: 5,
+          source: "local",
+          zohoItemId: "",
+          zohoLocations: null,
+          lastSyncedAt: null,
           unitsSold: migratingInventory
             ? this.data.orders.filter((order) => paidStatuses.has(order.status) && order.formatSlug === format.slug)
               .reduce((total, order) => total + safeQuantity(order.quantity), 0)
@@ -123,6 +145,10 @@ export class JsonStore {
         item.sku = format.sku;
         if (!Number.isInteger(item.unitsSold)) item.unitsSold = 0;
         if (!Number.isInteger(item.reorderLevel)) item.reorderLevel = 5;
+        if (!item.source) item.source = "local";
+        if (!Object.hasOwn(item, "zohoItemId")) item.zohoItemId = "";
+        if (!Object.hasOwn(item, "zohoLocations")) item.zohoLocations = null;
+        if (!Object.hasOwn(item, "lastSyncedAt")) item.lastSyncedAt = null;
       }
     }
 
@@ -137,6 +163,13 @@ export class JsonStore {
     if (this.data.payments.length === 0 && this.data.orders.length > 0) {
       for (const order of this.data.orders) this.#upsertPaymentFromOrder(order, "data.migrated", {});
       needsPersist = true;
+    }
+
+    for (const order of this.data.orders) {
+      if (paidStatuses.has(order.status) && !this.data.zohoOrderQueue.some((entry) => entry.orderId === order.id)) {
+        this.#queueZohoOrder(order, order.createdAt || now);
+        needsPersist = true;
+      }
     }
 
     if (this.#pruneStaleReservations()) needsPersist = true;
@@ -222,6 +255,25 @@ export class JsonStore {
     }
     this.data.inventoryReservations = this.data.inventoryReservations.slice(0, MAX_STORED_RESERVATIONS);
     return changed;
+  }
+
+  #queueZohoOrder(order, now = new Date().toISOString()) {
+    if (!order?.id || this.data.zohoOrderQueue.some((entry) => entry.orderId === order.id)) return null;
+    const entry = {
+      id: randomUUID(),
+      orderId: order.id,
+      orderNumber: order.orderNumber,
+      status: "pending",
+      attempts: 0,
+      lastError: "",
+      createdAt: now,
+      updatedAt: now
+    };
+    this.data.zohoOrderQueue.unshift(entry);
+    this.data.zohoOrderQueue = this.data.zohoOrderQueue.slice(0, MAX_ZOHO_QUEUE);
+    order.zohoSyncStatus = "pending";
+    order.zohoQueuedAt = now;
+    return entry;
   }
 
   async reserveInventory(format, quantity, token) {
@@ -424,6 +476,7 @@ export class JsonStore {
         this.data.orders.unshift(order);
       }
       this.#completeInventoryForOrder(order, now);
+      if (paidStatuses.has(order.status)) this.#queueZohoOrder(order, now);
       if (["expired", "payment_failed"].includes(order.status)) this.#releaseSessionReservation(sessionId, order.status, now);
       this.#upsertPaymentFromOrder(order, event.type, object);
     }
@@ -477,6 +530,136 @@ export class JsonStore {
     };
   }
 
+  zohoSyncState() {
+    const pendingOrders = this.data.zohoOrderQueue.filter((entry) => entry.status === "pending").length;
+    const failedOrders = this.data.zohoOrderQueue.filter((entry) => entry.status === "failed").length;
+    return { ...this.data.zohoSync, pendingOrders, failedOrders };
+  }
+
+  async recordZohoTest(inspection) {
+    const now = inspection.checkedAt || new Date().toISOString();
+    this.data.zohoSync = {
+      ...this.data.zohoSync,
+      status: inspection.ready ? "ready" : "mapping_required",
+      lastAttemptAt: now,
+      lastConnectedAt: now,
+      lastError: inspection.ready ? "" : "Every storefront SKU must have sellable stock at the configured U.S. location.",
+      liberiaLocation: inspection.liberiaLocation,
+      usLocation: inspection.usLocation,
+      onlineCustomer: inspection.onlineCustomer,
+      mappings: inspection.mappings
+    };
+    await this.persist();
+    return this.zohoSyncState();
+  }
+
+  async recordZohoFailure(error) {
+    const now = new Date().toISOString();
+    this.data.zohoSync = {
+      ...this.data.zohoSync,
+      status: this.data.zohoSync.lastSuccessAt ? "degraded" : "connection_error",
+      lastAttemptAt: now,
+      lastError: String(error?.message || "Zoho synchronization failed.").slice(0, 280)
+    };
+    await this.persist();
+    return this.zohoSyncState();
+  }
+
+  async applyZohoSync(result) {
+    const now = result.checkedAt || new Date().toISOString();
+    for (const mapping of result.mappings) {
+      const item = this.#inventoryRecord(mapping.formatSlug);
+      if (!item) continue;
+      item.zohoItemId = mapping.zohoItemId;
+      item.zohoLocations = { liberia: mapping.liberia, us: mapping.us };
+      item.lastSyncedAt = now;
+      if (result.activate && mapping.ready) {
+        const previousStockOnHand = Number.isInteger(item.stockOnHand) ? item.stockOnHand : null;
+        item.stockOnHand = mapping.us.available;
+        item.source = "zoho";
+        item.updatedAt = now;
+        if (previousStockOnHand !== item.stockOnHand) {
+          this.data.inventoryAdjustments.unshift({
+            id: randomUUID(),
+            formatSlug: item.formatSlug,
+            previousStockOnHand,
+            stockOnHand: item.stockOnHand,
+            delta: Number.isInteger(previousStockOnHand) ? item.stockOnHand - previousStockOnHand : null,
+            reason: "Zoho Inventory sync · U.S. fulfillment location",
+            source: "zoho",
+            createdAt: now
+          });
+        }
+      }
+    }
+    this.data.inventoryAdjustments = this.data.inventoryAdjustments.slice(0, 2000);
+    this.data.zohoSync = {
+      ...this.data.zohoSync,
+      status: result.activate ? "active" : result.ready ? "ready" : "mapping_required",
+      inventoryAuthority: Boolean(result.activate),
+      lastAttemptAt: now,
+      lastConnectedAt: now,
+      lastSuccessAt: now,
+      lastError: result.ready ? "" : "Every storefront SKU must have sellable stock at the configured U.S. location.",
+      liberiaLocation: result.liberiaLocation,
+      usLocation: result.usLocation,
+      onlineCustomer: result.onlineCustomer,
+      mappings: result.mappings
+    };
+    await this.persist();
+    return this.zohoSyncState();
+  }
+
+  pendingZohoOrders(limit = 25) {
+    const safeLimit = Math.max(1, Math.min(Number(limit) || 25, 100));
+    return this.data.zohoOrderQueue
+      .filter((entry) => ["pending", "failed"].includes(entry.status))
+      .slice(0, safeLimit)
+      .map((entry) => {
+        const order = this.data.orders.find((item) => item.id === entry.orderId) || null;
+        const inventory = order ? this.#inventoryRecord(order.formatSlug) : null;
+        return { entry: { ...entry }, order, mapping: inventory ? { zohoItemId: inventory.zohoItemId } : null };
+      });
+  }
+
+  async markZohoOrderSynced(orderId, result) {
+    const now = result.syncedAt || new Date().toISOString();
+    const entry = this.data.zohoOrderQueue.find((item) => item.orderId === orderId);
+    const order = this.data.orders.find((item) => item.id === orderId);
+    if (!entry || !order) return null;
+    entry.status = "synced";
+    entry.attempts += 1;
+    entry.lastError = "";
+    entry.zohoSalesOrderId = result.salesOrderId;
+    entry.updatedAt = now;
+    entry.syncedAt = now;
+    order.zohoSyncStatus = "synced";
+    order.zohoSalesOrderId = result.salesOrderId;
+    order.zohoSalesOrderNumber = result.salesOrderNumber;
+    order.zohoSyncedAt = now;
+    await this.persist();
+    return entry;
+  }
+
+  async markZohoOrderFailed(orderId, error) {
+    const now = new Date().toISOString();
+    const entry = this.data.zohoOrderQueue.find((item) => item.orderId === orderId);
+    const order = this.data.orders.find((item) => item.id === orderId);
+    if (!entry) return null;
+    entry.status = "failed";
+    entry.attempts += 1;
+    entry.lastError = String(error?.message || "Zoho order synchronization failed.").slice(0, 280);
+    entry.updatedAt = now;
+    if (order) order.zohoSyncStatus = "failed";
+    await this.persist();
+    return entry;
+  }
+
+  zohoOrderReport(limit = 100) {
+    const safeLimit = Math.max(1, Math.min(Number(limit) || 100, 500));
+    return this.data.zohoOrderQueue.slice(0, safeLimit).map((entry) => ({ ...entry }));
+  }
+
   inventoryReport() {
     this.#pruneStaleReservations();
     return this.data.inventory.map((item) => {
@@ -496,6 +679,10 @@ export class JsonStore {
         reorderLevel: item.reorderLevel,
         unitsSold: item.unitsSold,
         status,
+        source: item.source || "local",
+        zohoItemId: item.zohoItemId || "",
+        zohoLocations: item.zohoLocations || null,
+        lastSyncedAt: item.lastSyncedAt || null,
         updatedAt: item.updatedAt
       };
     });
@@ -510,9 +697,19 @@ export class JsonStore {
   async updateInventory(formatSlug, update) {
     const item = this.#inventoryRecord(formatSlug);
     if (!item) return null;
+    if (item.source === "zoho" && this.data.zohoSync.inventoryAuthority && Object.hasOwn(update, "stockOnHand")) {
+      throw new InventoryError(
+        "Stock on hand is controlled by Zoho Inventory. Update the U.S. location in Zoho, then run a sync.",
+        { formatSlug },
+        "inventory_read_only"
+      );
+    }
     const now = new Date().toISOString();
     const previousStockOnHand = Number.isInteger(item.stockOnHand) ? item.stockOnHand : null;
-    if (Object.hasOwn(update, "stockOnHand")) item.stockOnHand = update.stockOnHand;
+    if (Object.hasOwn(update, "stockOnHand")) {
+      item.stockOnHand = update.stockOnHand;
+      item.source = "local";
+    }
     if (Object.hasOwn(update, "reorderLevel")) item.reorderLevel = update.reorderLevel;
     item.updatedAt = now;
     this.data.inventoryAdjustments.unshift({
@@ -522,6 +719,7 @@ export class JsonStore {
       stockOnHand: Number.isInteger(item.stockOnHand) ? item.stockOnHand : null,
       delta: Number.isInteger(previousStockOnHand) && Number.isInteger(item.stockOnHand) ? item.stockOnHand - previousStockOnHand : null,
       reason: String(update.reason || "Manual inventory count").slice(0, 180),
+      source: "local",
       createdAt: now
     });
     this.data.inventoryAdjustments = this.data.inventoryAdjustments.slice(0, 2000);

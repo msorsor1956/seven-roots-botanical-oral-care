@@ -48,6 +48,38 @@
         <article><span>04</span><b data-total-payments>—</b><p>Payment records</p></article>
       </section>
 
+      <section class="data-panel zoho-panel">
+        <div class="panel-heading">
+          <div><p class="eyebrow">Warehouse network</p><h2>Zoho Inventory bridge</h2></div>
+          <span class="connector-badge" data-zoho-badge>Checking connection</span>
+        </div>
+        <div class="connector-overview">
+          <article><span>Connection</span><b data-zoho-connection>—</b><small data-zoho-datacenter>Zoho data center</small></article>
+          <article><span>Liberia source</span><b data-zoho-liberia>—</b><small>Replenishment stock</small></article>
+          <article><span>U.S. fulfillment</span><b data-zoho-us>—</b><small>Controls online availability</small></article>
+          <article><span>Order outbox</span><b data-zoho-orders>—</b><small>Paid orders waiting to sync</small></article>
+        </div>
+        <div class="connector-guidance">
+          <div>
+            <h3>Connection checklist</h3>
+            <p data-zoho-note>The bridge stays in readiness mode until credentials, locations, and every storefront SKU are verified.</p>
+            <div class="setting-list" data-zoho-settings></div>
+          </div>
+          <div class="connector-actions">
+            <button type="button" data-zoho-test>Test connection</button>
+            <button type="button" data-zoho-sync>Sync inventory</button>
+            <button type="button" data-zoho-orders-sync>Sync paid orders</button>
+          </div>
+        </div>
+        <div class="table-scroll connector-mappings">
+          <table>
+            <thead><tr><th>Store format</th><th>SKU</th><th>Zoho item</th><th>Liberia available</th><th>U.S. available</th><th>Mapping</th></tr></thead>
+            <tbody data-zoho-mapping-body><tr><td colspan="6">Waiting for Zoho connection settings.</td></tr></tbody>
+          </table>
+        </div>
+        <p class="connector-status" data-zoho-status role="status" aria-live="polite"></p>
+      </section>
+
       <section class="data-panel financial-panel">
         <div class="panel-heading"><div><p class="eyebrow">Financial report</p><h2>Sales and refunds</h2></div><button type="button" data-export="payments">Export payments</button></div>
         <div class="finance-grid" data-finance-summary><p class="empty">Loading financial report…</p></div>
@@ -65,8 +97,8 @@
       </section>
 
       <section class="data-panel inventory-panel">
-        <div class="panel-heading"><div><p class="eyebrow">Inventory control</p><h2>Stock by format</h2></div><small>Saved counts immediately control checkout availability</small></div>
-        <p class="inventory-help">Enter the physical packs on hand and a low-stock threshold. Leave stock blank to keep a format untracked; once tracked, active Checkout Sessions reserve inventory until payment or expiry.</p>
+        <div class="panel-heading"><div><p class="eyebrow">Inventory control</p><h2>Stock by format</h2></div><small>U.S. sellable stock controls checkout availability</small></div>
+        <p class="inventory-help">Before Zoho activation, enter physical packs on hand here. After activation, update physical stock in Zoho and synchronize this dashboard; active Checkout Sessions reserve U.S. inventory until payment or expiry.</p>
         <div class="inventory-list" data-inventory-list><p class="empty">Loading inventory…</p></div>
       </section>
 

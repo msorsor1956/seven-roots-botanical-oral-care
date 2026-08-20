@@ -37,6 +37,8 @@ The Railway deployment serves the frontend and API from one Node process. The Gi
 - Private `/admin` commerce dashboard with orders, inventory controls, financial reports, payment records, leads, and CSV export
 - Signed Stripe webhook processing with idempotent order numbers and a separate payment ledger
 - Optional per-format stock tracking with Checkout reservations, expiry release, low-stock states, and adjustment history
+- Connection-ready Zoho Inventory bridge with OAuth refresh, exact SKU validation, Liberia/U.S. location stock, and a safe activation gate
+- Persistent paid-order outbox with idempotent Zoho sales-order creation and retry visibility
 - Gross sales, product sales, shipping, refunds, net collected, monthly performance, and product performance reports
 - Automated API and static-serving tests
 
@@ -84,6 +86,16 @@ STRIPE_PRICE_DAILY_RITUAL=<active one-time Price ID>
 STRIPE_PRICE_FAMILY_RESERVE=<active one-time Price ID>
 STRIPE_SHIPPING_COUNTRIES=US
 STRIPE_SHIPPING_RATE_IDS=<optional comma-separated Shipping Rate IDs>
+ZOHO_INVENTORY_ENABLED=false
+ZOHO_INVENTORY_ORGANIZATION_ID=<Zoho organization ID>
+ZOHO_CLIENT_ID=<Zoho server client ID>
+ZOHO_CLIENT_SECRET=<Zoho server client secret>
+ZOHO_REFRESH_TOKEN=<offline OAuth refresh token>
+ZOHO_LIBERIA_LOCATION_ID=<Zoho Liberia source location ID>
+ZOHO_US_LOCATION_ID=<Zoho U.S. fulfillment location ID>
+ZOHO_ONLINE_CUSTOMER_ID=<Zoho customer ID used for web sales orders>
+ZOHO_ACCOUNTS_URL=https://accounts.zoho.com
+ZOHO_API_URL=https://www.zohoapis.com/inventory/v1
 ```
 
 Add a Railway volume mounted at `/data`. Without a volume, submissions work but the service filesystem may be replaced during a deployment. Do not commit the generated `.data` directory or an admin key.
@@ -116,6 +128,21 @@ Inventory starts in **not tracked** mode after the automatic data migration, so 
 3. Save the count with an adjustment note.
 
 Once a format has a stock count, new Checkout Sessions reserve the requested packs. A signed successful-payment event converts the reservation into sold stock; an expired or failed Checkout releases it. Refunds are recorded financially but do not automatically restock a physical item because a refund does not prove that sellable goods were returned. Update the physical count after inspecting a return.
+
+### Connect Zoho Inventory when the account is ready
+
+The deployed code can remain disconnected safely. It never accepts Zoho credentials through the browser or an API request; secrets belong only in Railway Variables.
+
+1. In Zoho Inventory, create the three items with the exact SKUs `SR-T01`, `SR-R05`, and `SR-F12`.
+2. Create a Liberia source location and a U.S. fulfillment location, then copy both location IDs.
+3. Create a dedicated `SEVEN ROOTS Online Store` customer and copy its customer ID. Paid web orders are filed against this customer while the Stripe order number remains the unique Zoho sales-order reference.
+4. Register a Zoho server-based OAuth client and issue an offline refresh token with only these scopes: `ZohoInventory.items.READ`, `ZohoInventory.settings.READ`, `ZohoInventory.contacts.READ`, `ZohoInventory.salesorders.CREATE`, `ZohoInventory.salesorders.READ`, and `ZohoInventory.salesorders.UPDATE`.
+5. Add the variables above in Railway, leaving `ZOHO_INVENTORY_ENABLED=false`.
+6. Open `/admin`, run **Test connection**, and verify both locations plus all three SKU mappings.
+7. Run **Sync inventory** in readiness mode. This displays both warehouse counts without changing checkout.
+8. Set `ZOHO_INVENTORY_ENABLED=true` in Railway, redeploy, and run **Sync inventory** again. Verified U.S. sellable counts then become the checkout authority, while Liberia quantities remain visible for replenishment planning.
+
+Every signed paid Stripe order enters a durable outbox. When Zoho is enabled, the backend creates or finds the matching Zoho sales order by the SEVEN ROOTS order number, confirms it, and records the Zoho sales-order ID. Failed exports remain visible and can be retried from the admin dashboard. This follows Zoho's official [OAuth](https://www.zoho.com/inventory/api/v1/oauth/), [Items](https://www.zoho.com/inventory/api/v1/items/), [Locations](https://www.zoho.com/inventory/api/v1/locations/), and [Sales Orders](https://www.zoho.com/inventory/api/v1/salesorders/) API contracts.
 
 Railway configuration follows the official [Config as Code](https://docs.railway.com/config-as-code/reference), [healthcheck](https://docs.railway.com/deployments/healthchecks), and [public networking](https://docs.railway.com/networking/public-networking) guidance.
 

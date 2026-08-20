@@ -43,6 +43,60 @@ const paymentMock = () => ({
   }
 });
 
+const zohoInspection = (activate = false) => ({
+  checkedAt: "2026-08-20T12:00:00.000Z",
+  locations: [
+    { id: "loc_liberia", name: "Liberia Warehouse", country: "Liberia", status: "active" },
+    { id: "loc_us", name: "U.S. Fulfillment", country: "United States", status: "active" }
+  ],
+  liberiaLocation: { id: "loc_liberia", name: "Liberia Warehouse", country: "Liberia", status: "active" },
+  usLocation: { id: "loc_us", name: "U.S. Fulfillment", country: "United States", status: "active" },
+  locationsReady: true,
+  mappings: [
+    { formatSlug: "travel-sleeve", formatName: "Travel Sleeve", sku: "SR-T01", matched: true, zohoItemId: "item_t01", zohoItemName: "Travel Sleeve", liberia: { locationId: "loc_liberia", locationName: "Liberia Warehouse", onHand: 90, available: 88 }, us: { locationId: "loc_us", locationName: "U.S. Fulfillment", onHand: 12, available: 11 }, ready: true },
+    { formatSlug: "daily-ritual", formatName: "Daily Ritual", sku: "SR-R05", matched: true, zohoItemId: "item_r05", zohoItemName: "Daily Ritual", liberia: { locationId: "loc_liberia", locationName: "Liberia Warehouse", onHand: 42, available: 40 }, us: { locationId: "loc_us", locationName: "U.S. Fulfillment", onHand: 4, available: 4 }, ready: true },
+    { formatSlug: "family-reserve", formatName: "Family Reserve", sku: "SR-F12", matched: true, zohoItemId: "item_f12", zohoItemName: "Family Reserve", liberia: { locationId: "loc_liberia", locationName: "Liberia Warehouse", onHand: 20, available: 18 }, us: { locationId: "loc_us", locationName: "U.S. Fulfillment", onHand: 7, available: 6 }, ready: true }
+  ],
+  mappedCount: 3,
+  readyCount: 3,
+  ready: true,
+  activate
+});
+
+const zohoMock = ({ active = false } = {}) => {
+  const mock = {
+    active,
+    createdOrders: [],
+    status(state = {}) {
+      return {
+        provider: "zoho_inventory",
+        configured: true,
+        enabled: mock.active,
+        connected: Boolean(state.lastConnectedAt || state.lastSuccessAt),
+        inventoryAuthority: Boolean(state.inventoryAuthority && mock.active),
+        missingSettings: [],
+        organizationId: "…123456",
+        dataCenter: "www.zohoapis.com",
+        locations: { liberia: state.liberiaLocation || null, us: state.usLocation || null },
+        mappings: state.mappings || [],
+        pendingOrders: state.pendingOrders || 0,
+        failedOrders: state.failedOrders || 0,
+        lastAttemptAt: state.lastAttemptAt || null,
+        lastSuccessAt: state.lastSuccessAt || null,
+        lastError: state.lastError || "",
+        activationNote: mock.active ? "Enabled" : "Readiness mode"
+      };
+    },
+    async testConnection() { return zohoInspection(false); },
+    async syncCatalog() { return zohoInspection(mock.active); },
+    async createPaidSalesOrder(order, mapping) {
+      mock.createdOrders.push({ orderNumber: order.orderNumber, zohoItemId: mapping.zohoItemId });
+      return { salesOrderId: `zso_${order.orderNumber}`, salesOrderNumber: order.orderNumber, syncedAt: "2026-08-20T12:05:00.000Z" };
+    }
+  };
+  return mock;
+};
+
 test("serves the storefront and health endpoint", async () => {
   await withServer(async (baseUrl) => {
     const home = await fetch(`${baseUrl}/`);
@@ -468,4 +522,133 @@ test("records Stripe refunds without duplicating the payment ledger", async () =
     assert.equal(totals.refunds, 1000);
     assert.equal(totals.netCollected, 3000);
   }, { payments: paymentMock() });
+});
+
+test("reports a disconnected Zoho bridge without exposing credentials", async () => {
+  await withServer(async (baseUrl) => {
+    const response = await fetch(`${baseUrl}/api/v1/admin/zoho/status`, {
+      headers: { authorization: "Bearer test-admin-key" }
+    });
+    const payload = await response.json();
+    assert.equal(response.status, 200);
+    assert.equal(payload.data.configured, false);
+    assert.equal(payload.data.enabled, false);
+    assert.ok(payload.data.missingSettings.includes("ZOHO_REFRESH_TOKEN"));
+    assert.equal(JSON.stringify(payload).includes("clientSecret"), false);
+
+    const testConnection = await fetch(`${baseUrl}/api/v1/admin/zoho/test`, {
+      method: "POST",
+      headers: { authorization: "Bearer test-admin-key" }
+    });
+    assert.equal(testConnection.status, 503);
+    assert.equal((await testConnection.json()).error.code, "zoho_not_configured");
+  });
+});
+
+test("synchronizes Liberia and U.S. Zoho stock and protects authoritative counts", async () => {
+  const zoho = zohoMock({ active: true });
+  await withServer(async (baseUrl) => {
+    const testConnection = await fetch(`${baseUrl}/api/v1/admin/zoho/test`, {
+      method: "POST",
+      headers: { authorization: "Bearer test-admin-key" }
+    });
+    assert.equal(testConnection.status, 200);
+
+    const sync = await fetch(`${baseUrl}/api/v1/admin/zoho/sync`, {
+      method: "POST",
+      headers: { authorization: "Bearer test-admin-key" }
+    });
+    const syncPayload = await sync.json();
+    assert.equal(sync.status, 200);
+    assert.equal(syncPayload.data.inventoryAuthority, true);
+    assert.equal(syncPayload.data.mappings.length, 3);
+
+    const inventory = await fetch(`${baseUrl}/api/v1/admin/inventory`, {
+      headers: { authorization: "Bearer test-admin-key" }
+    });
+    const ritual = (await inventory.json()).data.find((item) => item.formatSlug === "daily-ritual");
+    assert.equal(ritual.source, "zoho");
+    assert.equal(ritual.stockOnHand, 4);
+    assert.equal(ritual.zohoLocations.liberia.available, 40);
+    assert.equal(ritual.zohoLocations.us.available, 4);
+
+    const oversell = await fetch(`${baseUrl}/api/v1/checkout/sessions`, {
+      method: "POST",
+      headers: { "content-type": "application/json", "x-request-id": "zoho-stock-limit" },
+      body: JSON.stringify({ formatSlug: "daily-ritual", quantity: 5 })
+    });
+    assert.equal(oversell.status, 409);
+    assert.equal((await oversell.json()).error.details.available, 4);
+
+    const manualOverwrite = await fetch(`${baseUrl}/api/v1/admin/inventory/daily-ritual`, {
+      method: "PATCH",
+      headers: { authorization: "Bearer test-admin-key", "content-type": "application/json" },
+      body: JSON.stringify({ stockOnHand: 100 })
+    });
+    assert.equal(manualOverwrite.status, 409);
+    assert.equal((await manualOverwrite.json()).error.code, "inventory_read_only");
+  }, { payments: paymentMock(), zoho });
+});
+
+test("exports paid Stripe orders to Zoho exactly once through the durable outbox", async () => {
+  const zoho = zohoMock({ active: false });
+  await withServer(async (baseUrl) => {
+    await fetch(`${baseUrl}/api/v1/admin/zoho/sync`, {
+      method: "POST",
+      headers: { authorization: "Bearer test-admin-key" }
+    });
+    const event = {
+      id: "evt_zoho_order_paid_1",
+      type: "checkout.session.completed",
+      livemode: true,
+      data: {
+        object: {
+          id: "cs_test_zoho123",
+          created: 1787184000,
+          payment_status: "paid",
+          payment_intent: "pi_zoho_123",
+          amount_subtotal: 3600,
+          amount_total: 4195,
+          total_details: { amount_shipping: 595, amount_tax: 0 },
+          currency: "usd",
+          metadata: { format_slug: "daily-ritual", format_name: "Daily Ritual", sku: "SR-R05", quantity: "2" },
+          customer_details: { name: "Amina Johnson", email: "amina@example.com" }
+        }
+      }
+    };
+    const webhook = await fetch(`${baseUrl}/api/v1/stripe/webhook`, {
+      method: "POST",
+      headers: { "content-type": "application/json", "stripe-signature": "test-signature" },
+      body: JSON.stringify(event)
+    });
+    assert.equal(webhook.status, 200);
+
+    const queued = await fetch(`${baseUrl}/api/v1/admin/zoho/orders`, {
+      headers: { authorization: "Bearer test-admin-key" }
+    });
+    assert.equal((await queued.json()).data[0].status, "pending");
+
+    zoho.active = true;
+    const activationSync = await fetch(`${baseUrl}/api/v1/admin/zoho/sync`, {
+      method: "POST",
+      headers: { authorization: "Bearer test-admin-key" }
+    });
+    assert.equal(activationSync.status, 200);
+    for (let attempt = 0; attempt < 2; attempt += 1) {
+      const sync = await fetch(`${baseUrl}/api/v1/admin/zoho/orders/sync`, {
+        method: "POST",
+        headers: { authorization: "Bearer test-admin-key" }
+      });
+      assert.equal(sync.status, 200);
+    }
+    assert.equal(zoho.createdOrders.length, 1);
+    assert.equal(zoho.createdOrders[0].zohoItemId, "item_r05");
+
+    const completed = await fetch(`${baseUrl}/api/v1/admin/zoho/orders`, {
+      headers: { authorization: "Bearer test-admin-key" }
+    });
+    const completedEntry = (await completed.json()).data[0];
+    assert.equal(completedEntry.status, "synced");
+    assert.match(completedEntry.zohoSalesOrderId, /^zso_SR-/u);
+  }, { payments: paymentMock(), zoho });
 });

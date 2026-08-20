@@ -10,6 +10,7 @@
   const formatNames = { 'travel-sleeve': 'Travel Sleeve', 'daily-ritual': 'Daily Ritual', 'family-reserve': 'Family Reserve' };
   let apiKey = sessionStorage.getItem('seven-roots-admin-key') || '';
   let collections = { orders: [], payments: [], inventory: [], waitlist: [], inquiries: [] };
+  let currentZohoStatus = { configured: false, enabled: false, inventoryAuthority: false, mappings: [] };
 
   const setStatus = (element, message, isError = false) => {
     element.textContent = message;
@@ -46,7 +47,7 @@
     ? new Intl.NumberFormat(undefined, { style: 'currency', currency }).format(amount / 100)
     : '—';
   const statusLabel = (value) => String(value || 'unknown').replaceAll('_', ' ');
-  const statusIsAlert = (value) => !['paid', 'pending', 'in_stock', 'not_tracked'].includes(value);
+  const statusIsAlert = (value) => !['paid', 'pending', 'in_stock', 'not_tracked', 'active', 'ready', 'synced'].includes(value);
 
   const addCells = (row, values) => values.forEach((value) => {
     const cell = row.insertCell();
@@ -161,6 +162,76 @@
     });
   };
 
+  const renderZoho = (status) => {
+    currentZohoStatus = status;
+    const badge = qs('[data-zoho-badge]');
+    const state = status.inventoryAuthority
+      ? 'Active inventory authority'
+      : status.connected
+        ? status.enabled ? 'Mapping required' : 'Verified · readiness mode'
+        : status.configured ? 'Ready to test' : 'Not connected';
+    badge.textContent = state;
+    badge.classList.toggle('is-ready', status.inventoryAuthority || (status.connected && !status.enabled));
+    badge.classList.toggle('is-alert', status.enabled && !status.inventoryAuthority);
+    qs('[data-zoho-connection]').textContent = status.inventoryAuthority ? 'Live' : status.connected ? 'Verified' : status.configured ? 'Configured' : 'Waiting';
+    qs('[data-zoho-datacenter]').textContent = [status.organizationId, status.dataCenter].filter(Boolean).join(' · ') || 'Zoho data center';
+    qs('[data-zoho-liberia]').textContent = status.locations?.liberia?.name || 'Not mapped';
+    qs('[data-zoho-us]').textContent = status.locations?.us?.name || 'Not mapped';
+    qs('[data-zoho-orders]').textContent = (status.pendingOrders || 0) + (status.failedOrders || 0);
+    qs('[data-zoho-note]').textContent = status.activationNote;
+
+    const settings = qs('[data-zoho-settings]');
+    settings.replaceChildren();
+    if (status.missingSettings?.length) {
+      status.missingSettings.forEach((name) => {
+        const setting = document.createElement('span');
+        setting.textContent = name;
+        settings.append(setting);
+      });
+    } else {
+      const ready = document.createElement('span');
+      ready.className = 'is-set';
+      ready.textContent = 'All secure Railway settings are present';
+      settings.append(ready);
+    }
+
+    const body = qs('[data-zoho-mapping-body]');
+    body.replaceChildren();
+    if (!status.mappings?.length) {
+      const row = body.insertRow();
+      const cell = row.insertCell();
+      cell.colSpan = 6;
+      cell.textContent = 'Run Test connection after adding the Railway settings.';
+    }
+    status.mappings?.forEach((mapping) => {
+      const row = body.insertRow();
+      addCells(row, [
+        mapping.formatName,
+        mapping.sku,
+        mapping.matched ? `${mapping.zohoItemName} · ${mapping.zohoItemId}` : 'Not found',
+        Number.isInteger(mapping.liberia?.available) ? mapping.liberia.available : '—',
+        Number.isInteger(mapping.us?.available) ? mapping.us.available : '—'
+      ]);
+      addStatusCell(row, mapping.ready ? 'ready' : 'mapping_required');
+    });
+
+    const testButton = qs('[data-zoho-test]');
+    const syncButton = qs('[data-zoho-sync]');
+    const orderButton = qs('[data-zoho-orders-sync]');
+    testButton.disabled = !status.configured;
+    syncButton.disabled = !status.configured;
+    orderButton.disabled = !status.enabled || !status.inventoryAuthority || !((status.pendingOrders || 0) + (status.failedOrders || 0));
+    testButton.title = status.configured ? '' : 'Add the listed settings in Railway first.';
+    syncButton.title = testButton.title;
+    orderButton.title = status.inventoryAuthority ? '' : 'Enable Zoho only after a verified inventory sync.';
+    const message = status.lastError
+      ? status.lastError
+      : status.lastSuccessAt
+        ? `Last inventory sync ${formatDate(status.lastSuccessAt)}.`
+        : status.lastAttemptAt ? `Last connection check ${formatDate(status.lastAttemptAt)}.` : '';
+    setStatus(qs('[data-zoho-status]'), message, Boolean(status.lastError));
+  };
+
   const renderInventory = (items) => {
     const list = qs('[data-inventory-list]');
     list.replaceChildren();
@@ -168,6 +239,8 @@
       const form = document.createElement('form');
       form.className = 'inventory-row';
       form.dataset.formatSlug = item.formatSlug;
+      const zohoControlled = item.source === 'zoho' && currentZohoStatus.inventoryAuthority;
+      form.classList.toggle('is-external', zohoControlled);
 
       const identity = document.createElement('div');
       identity.className = 'inventory-identity';
@@ -178,7 +251,10 @@
       title.textContent = item.formatName;
       const sku = document.createElement('small');
       sku.textContent = item.sku;
-      identity.append(status, title, sku);
+      const source = document.createElement('small');
+      source.className = 'inventory-source';
+      source.textContent = zohoControlled ? 'Zoho · U.S. fulfillment stock' : 'Local inventory control';
+      identity.append(status, title, sku, source);
 
       const stats = document.createElement('dl');
       [
@@ -208,6 +284,8 @@
       stock.step = '1';
       stock.placeholder = 'Not tracked';
       stock.value = item.tracking ? item.stockOnHand : '';
+      stock.disabled = zohoControlled;
+      stock.title = zohoControlled ? 'Update stock in Zoho Inventory and run a sync.' : '';
       stockLabel.append(stockText, stock);
       const reorderLabel = document.createElement('label');
       const reorderText = document.createElement('span');
@@ -227,10 +305,11 @@
       reason.name = 'reason';
       reason.maxLength = 180;
       reason.placeholder = 'Physical count';
+      reason.disabled = zohoControlled;
       reasonLabel.append(reasonText, reason);
       const button = document.createElement('button');
       button.type = 'submit';
-      button.textContent = 'Save stock';
+      button.textContent = zohoControlled ? 'Save threshold' : 'Save stock';
       const formStatus = document.createElement('p');
       formStatus.className = 'inventory-status';
       formStatus.setAttribute('role', 'status');
@@ -244,10 +323,10 @@
         formStatus.classList.remove('is-error');
         const stockValue = stock.value.trim();
         const body = {
-          stockOnHand: stockValue === '' ? null : Number(stockValue),
           reorderLevel: Number(reorder.value),
           reason: reason.value.trim() || 'Physical inventory count'
         };
+        if (!zohoControlled) body.stockOnHand = stockValue === '' ? null : Number(stockValue);
         try {
           await api(`/api/v1/admin/inventory/${encodeURIComponent(item.formatSlug)}`, { method: 'PATCH', body });
           await loadDashboard();
@@ -366,9 +445,10 @@
 
   const loadDashboard = async () => {
     setStatus(dashboardStatus, 'Refreshing private commerce data…');
-    const [summary, financialReport, inventory, payments, orders, waitlist, inquiries] = await Promise.all([
+    const [summary, financialReport, zohoStatus, inventory, payments, orders, waitlist, inquiries] = await Promise.all([
       api('/api/v1/admin/summary'),
       api('/api/v1/admin/financial-report'),
+      api('/api/v1/admin/zoho/status'),
       api('/api/v1/admin/inventory'),
       api('/api/v1/admin/payments?limit=500'),
       api('/api/v1/admin/orders?limit=500'),
@@ -378,6 +458,7 @@
     collections = { orders, payments, inventory, waitlist, inquiries };
     renderSummary(summary);
     renderFinancialReport(financialReport);
+    renderZoho(zohoStatus);
     renderInventory(inventory);
     renderPayments(payments);
     renderOrders(orders);
@@ -410,6 +491,39 @@
   });
 
   qs('[data-refresh]').addEventListener('click', () => loadDashboard().catch((error) => setStatus(dashboardStatus, error.message, true)));
+
+  const runZohoAction = async (button, path, pendingMessage, successMessage) => {
+    const connectorStatus = qs('[data-zoho-status]');
+    button.disabled = true;
+    setStatus(connectorStatus, pendingMessage);
+    try {
+      await api(path, { method: 'POST' });
+      await loadDashboard();
+      setStatus(connectorStatus, successMessage);
+    } catch (error) {
+      setStatus(connectorStatus, error.message, true);
+      button.disabled = false;
+    }
+  };
+
+  qs('[data-zoho-test]').addEventListener('click', (event) => runZohoAction(
+    event.currentTarget,
+    '/api/v1/admin/zoho/test',
+    'Testing Zoho authorization, locations, and SKU mappings…',
+    'Zoho connection test completed.'
+  ));
+  qs('[data-zoho-sync]').addEventListener('click', (event) => runZohoAction(
+    event.currentTarget,
+    '/api/v1/admin/zoho/sync',
+    'Synchronizing Liberia and U.S. stock…',
+    'Zoho inventory synchronization completed.'
+  ));
+  qs('[data-zoho-orders-sync]').addEventListener('click', (event) => runZohoAction(
+    event.currentTarget,
+    '/api/v1/admin/zoho/orders/sync',
+    'Sending paid Stripe orders to Zoho…',
+    'Paid-order synchronization completed.'
+  ));
   qs('[data-logout]').addEventListener('click', () => {
     apiKey = '';
     sessionStorage.removeItem('seven-roots-admin-key');

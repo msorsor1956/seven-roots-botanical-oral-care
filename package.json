@@ -1,8 +1,8 @@
 {
   "name": "seven-roots-botanical-oral-care",
-  "version": "1.3.0",
+  "version": "1.4.0",
   "private": true,
-  "description": "SEVEN ROOTS storefront, Stripe Checkout, order management, and customer-interest API",
+  "description": "SEVEN ROOTS storefront, Stripe Checkout, order management, and Zoho warehouse integration",
   "type": "module",
   "engines": {
     "node": ">=20"
@@ -11,7 +11,7 @@
     "start": "node server/index.js",
     "dev": "NODE_ENV=development node --watch server/index.js",
     "test": "node --test",
-    "check": "node --check server/index.js && node --check server/app.js && node --check server/store.js && node --check server/payments.js && node --check app.js && node --check order-success.js && node --check admin.js",
+    "check": "node --check server/index.js && node --check server/app.js && node --check server/store.js && node --check server/payments.js && node --check server/zoho.js && node --check app.js && node --check order-success.js && node --check admin.js",
     "security": "node scripts/check-secrets.js"
   },
   "dependencies": {
