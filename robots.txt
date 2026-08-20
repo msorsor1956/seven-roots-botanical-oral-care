@@ -1,4 +1,6 @@
 User-agent: *
 Allow: /
+Disallow: /admin
+Disallow: /staff
 
 Sitemap: https://seven-roots-botanical-oral-care-production.up.railway.app/sitemap.xml

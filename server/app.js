@@ -9,6 +9,16 @@ import { createPayments, PaymentConfigurationError } from "./payments.js";
 import { InventoryError, JsonStore } from "./store.js";
 import { validateInquiry, validateWaitlist } from "./validation.js";
 import { createZohoInventory, ZohoApiError, ZohoConfigurationError } from "./zoho.js";
+import {
+  StaffAccessError,
+  StaffValidationError,
+  clearStaffSessionCookie,
+  hasStaffPermission,
+  readStaffSessionCookie,
+  roleCatalog,
+  secureStaffValueEqual,
+  staffSessionCookie
+} from "./staff.js";
 
 const serverDir = path.dirname(fileURLToPath(import.meta.url));
 const defaultRoot = path.resolve(serverDir, "..");
@@ -112,6 +122,10 @@ const safeStaticPath = (rootDir, pathname) => {
     ["/admin.html", "admin.html"],
     ["/admin.css", "admin.css"],
     ["/admin.js", "admin.js"],
+    ["/staff", "staff.html"],
+    ["/staff.html", "staff.html"],
+    ["/staff.css", "staff.css"],
+    ["/staff.js", "staff.js"],
     ["/order-success", "order-success.html"],
     ["/order-success.html", "order-success.html"],
     ["/order-success.css", "order-success.css"],
@@ -162,6 +176,7 @@ export async function createApplication(options = {}) {
   const writeLimiter = createRateLimiter({ windowMs: 15 * 60 * 1000, max: 20 });
   const checkoutLimiter = createRateLimiter({ windowMs: 15 * 60 * 1000, max: 8 });
   const connectorLimiter = createRateLimiter({ windowMs: 15 * 60 * 1000, max: 12 });
+  const staffAuthLimiter = createRateLimiter({ windowMs: 15 * 60 * 1000, max: 12 });
   let zohoProcessing = false;
 
   const processZohoOutbox = async (limit = 25) => {
@@ -194,6 +209,34 @@ export async function createApplication(options = {}) {
     }
   };
 
+  const adminActor = { id: "owner-admin-key", name: "Owner admin", role: "owner", locations: ["liberia", "us"] };
+  const requireStaff = async (request, permission = "") => {
+    const authentication = await store.staffSession(readStaffSessionCookie(request));
+    if (!authentication) throw new HttpError(401, "staff_unauthorized", "Sign in with an active staff account.");
+    if (permission && !hasStaffPermission(authentication.user, permission)) {
+      throw new HttpError(403, "staff_forbidden", "Your role does not allow this action.");
+    }
+    return authentication;
+  };
+  const requireStaffMutation = async (request, permission = "") => {
+    const authentication = await requireStaff(request, permission);
+    if (!secureStaffValueEqual(request.headers["x-csrf-token"], authentication.session.csrfToken)) {
+      throw new HttpError(403, "csrf_failed", "Refresh the staff dashboard and try again.");
+    }
+    return authentication;
+  };
+
+  const refreshZohoWarehouseSnapshot = async () => {
+    if (!zoho.active || !store.zohoSyncState().inventoryAuthority) return null;
+    try {
+      const result = await zoho.syncCatalog(formats);
+      return await store.applyZohoSync(result);
+    } catch (error) {
+      await store.recordZohoFailure(error);
+      return null;
+    }
+  };
+
   const retryTimer = setInterval(() => {
     void processZohoOutbox(10).catch((error) => console.error("Zoho order sync:", error?.message || "failed"));
   }, 5 * 60 * 1000);
@@ -214,6 +257,7 @@ export async function createApplication(options = {}) {
     if (environment === "production") response.setHeader("Strict-Transport-Security", "max-age=31536000; includeSubDomains");
     if (originAllowed && origin) {
       response.setHeader("Access-Control-Allow-Origin", origin);
+      response.setHeader("Access-Control-Allow-Credentials", "true");
       response.setHeader("Vary", "Origin");
     }
 
@@ -224,8 +268,8 @@ export async function createApplication(options = {}) {
       if (request.method === "OPTIONS" && pathname.startsWith("/api/")) {
         if (!originAllowed) throw new HttpError(403, "origin_not_allowed", "This browser origin is not allowed.");
         response.writeHead(204, {
-          "Access-Control-Allow-Methods": "GET, POST, PATCH, OPTIONS",
-          "Access-Control-Allow-Headers": "Content-Type, Authorization, X-Request-Id",
+          "Access-Control-Allow-Methods": "GET, POST, PATCH, DELETE, OPTIONS",
+          "Access-Control-Allow-Headers": "Content-Type, Authorization, X-CSRF-Token, X-Request-Id",
           "Access-Control-Max-Age": "86400"
         });
         response.end();
@@ -240,7 +284,7 @@ export async function createApplication(options = {}) {
         sendJson(response, 200, {
           status: "ok",
           service: "seven-roots-api",
-          version: "1.4.0",
+          version: "1.5.0",
           storage: "file",
           payments: payments.configured ? "ready" : "configuration_required",
           inventoryIntegration: zoho.active ? "zoho_enabled" : "local"
@@ -359,9 +403,197 @@ export async function createApplication(options = {}) {
         return;
       }
 
+      if (request.method === "POST" && pathname === "/api/v1/staff/auth/accept-invite") {
+        const rate = staffAuthLimiter(request);
+        if (!rate.allowed) throw new HttpError(429, "rate_limited", "Too many sign-in attempts. Try again later.", { retryAfter: rate.retryAfter });
+        const input = await readJson(request);
+        const authentication = await store.acceptStaffInvitation(String(input.token || ""), input.password);
+        sendJson(response, 201, {
+          data: { user: authentication.user, csrfToken: authentication.csrfToken, expiresAt: authentication.expiresAt },
+          message: "Your staff account is active."
+        }, { "Set-Cookie": staffSessionCookie(authentication.token, { secure: environment === "production" }) });
+        return;
+      }
+
+      if (request.method === "POST" && pathname === "/api/v1/staff/auth/login") {
+        const rate = staffAuthLimiter(request);
+        if (!rate.allowed) throw new HttpError(429, "rate_limited", "Too many sign-in attempts. Try again later.", { retryAfter: rate.retryAfter });
+        const input = await readJson(request);
+        const authentication = await store.authenticateStaff(input.email, input.password);
+        sendJson(response, 200, {
+          data: { user: authentication.user, csrfToken: authentication.csrfToken, expiresAt: authentication.expiresAt },
+          message: "Staff access verified."
+        }, { "Set-Cookie": staffSessionCookie(authentication.token, { secure: environment === "production" }) });
+        return;
+      }
+
+      if (request.method === "GET" && pathname === "/api/v1/staff/auth/session") {
+        const authentication = await requireStaff(request);
+        sendJson(response, 200, {
+          data: {
+            user: authentication.publicUser,
+            csrfToken: authentication.session.csrfToken,
+            expiresAt: authentication.session.expiresAt
+          }
+        });
+        return;
+      }
+
+      if (request.method === "POST" && pathname === "/api/v1/staff/auth/logout") {
+        await requireStaffMutation(request);
+        await store.endStaffSession(readStaffSessionCookie(request));
+        sendJson(response, 200, { data: { signedOut: true }, message: "Staff session ended." }, {
+          "Set-Cookie": clearStaffSessionCookie({ secure: environment === "production" })
+        });
+        return;
+      }
+
+      if (request.method === "GET" && pathname === "/api/v1/staff/workspace") {
+        const authentication = await requireStaff(request);
+        sendJson(response, 200, {
+          data: {
+            ...store.staffWorkspace(authentication.user),
+            zoho: zoho.status(store.zohoSyncState())
+          }
+        });
+        return;
+      }
+
+      if (request.method === "POST" && pathname === "/api/v1/staff/tasks") {
+        const authentication = await requireStaffMutation(request, "tasks.manage");
+        const task = await store.createStaffTask(authentication.user, await readJson(request));
+        sendJson(response, 201, { data: task, message: "Task created." });
+        return;
+      }
+
+      if (request.method === "PATCH" && pathname.startsWith("/api/v1/staff/tasks/")) {
+        const authentication = await requireStaffMutation(request, "tasks.update");
+        const taskId = pathname.slice("/api/v1/staff/tasks/".length);
+        const task = await store.updateStaffTask(authentication.user, taskId, await readJson(request));
+        sendJson(response, 200, { data: task, message: "Task updated." });
+        return;
+      }
+
+      if (request.method === "POST" && pathname === "/api/v1/staff/inventory/counts") {
+        const authentication = await requireStaffMutation(request, "inventory.count");
+        const count = await store.createStockCount(authentication.user, await readJson(request));
+        sendJson(response, 201, { data: count, message: "Physical count submitted for review." });
+        return;
+      }
+
+      if (request.method === "POST" && pathname.startsWith("/api/v1/staff/inventory/counts/") && pathname.endsWith("/review")) {
+        const authentication = await requireStaffMutation(request, "inventory.approve");
+        const countId = pathname.slice("/api/v1/staff/inventory/counts/".length, -"/review".length);
+        const input = await readJson(request);
+        const count = await store.reviewStockCount(authentication.user, countId, input.decision);
+        sendJson(response, 200, {
+          data: count,
+          message: count.status === "approved_pending_zoho"
+            ? "Count approved. Apply the adjustment in Zoho, then synchronize inventory."
+            : `Count ${count.status}.`
+        });
+        return;
+      }
+
+      if (request.method === "POST" && pathname === "/api/v1/staff/transfers") {
+        const authentication = await requireStaffMutation(request, "transfers.create");
+        const transfer = await store.createStockTransfer(authentication.user, await readJson(request));
+        sendJson(response, 201, { data: transfer, message: "Transfer draft created for owner approval." });
+        return;
+      }
+
+      if (request.method === "POST" && pathname.startsWith("/api/v1/staff/transfers/") && pathname.endsWith("/approve")) {
+        const authentication = await requireStaffMutation(request, "transfers.approve");
+        const transferId = pathname.slice("/api/v1/staff/transfers/".length, -"/approve".length);
+        const transfer = store.transferForAction(authentication.user, transferId, "transfers.approve", "draft");
+        let zohoResult = null;
+        const syncState = store.zohoSyncState();
+        if (zoho.active) {
+          if (!syncState.inventoryAuthority) throw new HttpError(409, "zoho_inventory_not_ready", "Run a successful Zoho inventory sync before approving transfers.");
+          zohoResult = await zoho.createTransferOrder(transfer, syncState.mappings);
+        }
+        const approved = await store.approveStockTransfer(authentication.user, transferId, zohoResult);
+        sendJson(response, 200, { data: approved, message: "Transfer approved." });
+        return;
+      }
+
+      if (request.method === "POST" && pathname.startsWith("/api/v1/staff/transfers/") && pathname.endsWith("/dispatch")) {
+        const authentication = await requireStaffMutation(request, "transfers.dispatch");
+        const transferId = pathname.slice("/api/v1/staff/transfers/".length, -"/dispatch".length);
+        const dispatchInput = await readJson(request);
+        const transfer = store.transferForAction(authentication.user, transferId, "transfers.dispatch", "approved");
+        if (zoho.active) {
+          if (!transfer.zohoTransferOrderId) throw new HttpError(409, "zoho_transfer_missing", "Approve this transfer in Zoho before dispatching it.");
+          await zoho.markTransferInTransit(transfer.zohoTransferOrderId);
+        }
+        const dispatched = await store.dispatchStockTransfer(authentication.user, transferId, dispatchInput);
+        if (zoho.active) await refreshZohoWarehouseSnapshot();
+        sendJson(response, 200, { data: dispatched, message: "Transfer marked in transit." });
+        return;
+      }
+
+      if (request.method === "POST" && pathname.startsWith("/api/v1/staff/transfers/") && pathname.endsWith("/receive")) {
+        const authentication = await requireStaffMutation(request, "transfers.receive");
+        const transferId = pathname.slice("/api/v1/staff/transfers/".length, -"/receive".length);
+        const transfer = store.transferForAction(authentication.user, transferId, "transfers.receive", "in_transit");
+        if (zoho.active) {
+          if (!transfer.zohoTransferOrderId) throw new HttpError(409, "zoho_transfer_missing", "This transfer has no Zoho transfer order.");
+          await zoho.markTransferReceived(transfer.zohoTransferOrderId);
+        }
+        const received = await store.receiveStockTransfer(authentication.user, transferId);
+        if (zoho.active) await refreshZohoWarehouseSnapshot();
+        sendJson(response, 200, { data: received, message: "Transfer received and reconciled." });
+        return;
+      }
+
+      if (request.method === "PATCH" && pathname.startsWith("/api/v1/staff/orders/") && pathname.endsWith("/fulfillment")) {
+        const authentication = await requireStaffMutation(request, "orders.fulfill");
+        const orderId = pathname.slice("/api/v1/staff/orders/".length, -"/fulfillment".length);
+        const order = await store.updateOrderFulfillment(authentication.user, orderId, await readJson(request));
+        sendJson(response, 200, { data: order, message: "Order fulfillment updated." });
+        return;
+      }
+
       if (pathname.startsWith("/api/v1/admin/")) {
         if (!adminApiKey) throw new HttpError(503, "admin_not_configured", "Admin access has not been configured.");
         if (!secureEqual(extractBearer(request), adminApiKey)) throw new HttpError(401, "unauthorized", "A valid admin API key is required.");
+        if (request.method === "GET" && pathname === "/api/v1/admin/staff/roles") {
+          sendJson(response, 200, { data: roleCatalog() });
+          return;
+        }
+        if (request.method === "GET" && pathname === "/api/v1/admin/staff") {
+          sendJson(response, 200, { data: store.listStaffUsers() });
+          return;
+        }
+        if (request.method === "POST" && pathname === "/api/v1/admin/staff") {
+          const created = await store.createStaffUser(await readJson(request), adminActor);
+          const invitationUrl = `${hostOrigin || "http://localhost"}/staff?invite=${encodeURIComponent(created.invitation.token)}`;
+          sendJson(response, 201, {
+            data: { user: created.user, invitationUrl, expiresAt: created.invitation.expiresAt },
+            message: "Employee invited. Copy the one-time link now; it will not be shown again."
+          });
+          return;
+        }
+        if (request.method === "POST" && pathname.startsWith("/api/v1/admin/staff/") && pathname.endsWith("/invitations")) {
+          const userId = pathname.slice("/api/v1/admin/staff/".length, -"/invitations".length);
+          const created = await store.issueStaffInvitation(userId, adminActor);
+          const invitationUrl = `${hostOrigin || "http://localhost"}/staff?invite=${encodeURIComponent(created.invitation.token)}`;
+          sendJson(response, 201, {
+            data: { user: created.user, invitationUrl, expiresAt: created.invitation.expiresAt },
+            message: "A new one-time invitation link was created."
+          });
+          return;
+        }
+        if (request.method === "PATCH" && pathname.startsWith("/api/v1/admin/staff/")) {
+          const userId = pathname.slice("/api/v1/admin/staff/".length);
+          const user = await store.updateStaffUser(userId, await readJson(request), adminActor);
+          sendJson(response, 200, { data: user, message: "Employee access updated." });
+          return;
+        }
+        if (request.method === "GET" && pathname === "/api/v1/admin/audit") {
+          sendJson(response, 200, { data: store.staffAudit(adminActor, url.searchParams.get("limit")) });
+          return;
+        }
         if (request.method === "GET" && pathname === "/api/v1/admin/summary") {
           sendJson(response, 200, { data: store.summary() });
           return;
@@ -480,8 +712,13 @@ export async function createApplication(options = {}) {
     } catch (error) {
       const inventoryError = error instanceof InventoryError;
       const zohoError = error instanceof ZohoConfigurationError || error instanceof ZohoApiError;
+      const staffError = error instanceof StaffAccessError || error instanceof StaffValidationError;
       const status = error instanceof HttpError
         ? error.status
+        : error instanceof StaffAccessError
+          ? error.status
+          : error instanceof StaffValidationError
+            ? 422
         : inventoryError
           ? 409
           : error instanceof ZohoConfigurationError
@@ -493,9 +730,9 @@ export async function createApplication(options = {}) {
       if (error?.details?.retryAfter) response.setHeader("Retry-After", String(error.details.retryAfter));
       sendJson(response, status, {
         error: {
-          code: error instanceof HttpError || inventoryError || zohoError ? error.code : "internal_error",
-          message: error instanceof HttpError || inventoryError || zohoError ? error.message : "The server could not complete this request.",
-          ...((error instanceof HttpError || inventoryError) && error.details ? { details: error.details } : {}),
+          code: error instanceof HttpError || inventoryError || zohoError || staffError ? error.code : "internal_error",
+          message: error instanceof HttpError || inventoryError || zohoError || staffError ? error.message : "The server could not complete this request.",
+          ...((error instanceof HttpError || inventoryError || staffError) && error.details ? { details: error.details } : {}),
           ...(error instanceof ZohoConfigurationError && error.missing.length ? { details: { missingSettings: error.missing } } : {}),
           requestId
         }

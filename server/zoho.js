@@ -327,6 +327,77 @@ export class ZohoInventory {
     return { ...inspection, activate: Boolean(this.enabled && inspection.ready) };
   }
 
+  async #findTransferOrder(transferNumber) {
+    for (let page = 1; page <= 10; page += 1) {
+      const payload = await this.#request("transferorders", { query: { page, per_page: 200, search_text: transferNumber } });
+      const transfers = Array.isArray(payload.transfer_orders)
+        ? payload.transfer_orders
+        : Array.isArray(payload.transferorders) ? payload.transferorders : [];
+      const existing = transfers.find((transfer) => transfer.transfer_order_number === transferNumber);
+      if (existing) return existing;
+      const hasMore = payload.page_context?.has_more_page ?? transfers.length === 200;
+      if (!hasMore) break;
+    }
+    return null;
+  }
+
+  async createTransferOrder(transfer, mappings) {
+    this.#assertConfigured();
+    if (!this.enabled) throw new ZohoConfigurationError("Zoho transfer write-back is disabled until verification is complete.");
+    const mappingBySlug = new Map((Array.isArray(mappings) ? mappings : []).map((mapping) => [mapping.formatSlug, mapping]));
+    const lineItems = transfer.items.map((item) => {
+      const mapping = mappingBySlug.get(item.formatSlug);
+      if (!mapping?.zohoItemId) throw new ZohoConfigurationError(`No Zoho item is mapped for ${item.sku || item.formatSlug}.`);
+      return {
+        item_id: mapping.zohoItemId,
+        name: mapping.zohoItemName || item.formatName,
+        description: `SEVEN ROOTS ${item.sku}`,
+        quantity_transfer: item.quantity,
+        unit: "qty"
+      };
+    });
+    let transferOrder = await this.#findTransferOrder(transfer.transferNumber);
+    if (!transferOrder) {
+      const payload = await this.#request("transferorders", {
+        method: "POST",
+        query: { ignore_auto_number_generation: true },
+        body: {
+          transfer_order_number: transfer.transferNumber,
+          date: String(transfer.createdAt || new Date().toISOString()).slice(0, 10),
+          description: String(transfer.notes || "Liberia to U.S. fulfillment transfer").slice(0, 500),
+          from_location_id: this.liberiaLocationId,
+          to_location_id: this.usLocationId,
+          line_items: lineItems
+        }
+      });
+      transferOrder = payload.transfer_order || null;
+    }
+    const transferOrderId = String(transferOrder?.transfer_order_id || "");
+    if (!transferOrderId) throw new ZohoApiError("Zoho created no identifiable transfer order.");
+    return {
+      transferOrderId,
+      transferOrderNumber: String(transferOrder.transfer_order_number || transfer.transferNumber),
+      status: String(transferOrder.status || "draft"),
+      syncedAt: new Date().toISOString()
+    };
+  }
+
+  async markTransferInTransit(transferOrderId) {
+    this.#assertConfigured();
+    if (!this.enabled) throw new ZohoConfigurationError("Zoho transfer write-back is disabled until verification is complete.");
+    if (!transferOrderId) throw new ZohoConfigurationError("This transfer has no Zoho transfer order ID.");
+    await this.#request(`transferorders/${encodeURIComponent(transferOrderId)}/intransit`, { method: "POST" });
+    return { transferOrderId, status: "in_transit", syncedAt: new Date().toISOString() };
+  }
+
+  async markTransferReceived(transferOrderId) {
+    this.#assertConfigured();
+    if (!this.enabled) throw new ZohoConfigurationError("Zoho transfer write-back is disabled until verification is complete.");
+    if (!transferOrderId) throw new ZohoConfigurationError("This transfer has no Zoho transfer order ID.");
+    await this.#request(`transferorders/${encodeURIComponent(transferOrderId)}/markastransferred`, { method: "POST" });
+    return { transferOrderId, status: "transferred", syncedAt: new Date().toISOString() };
+  }
+
   async #findSalesOrder(referenceNumber) {
     for (let page = 1; page <= 10; page += 1) {
       const payload = await this.#request("salesorders", { query: { page, per_page: 200 } });

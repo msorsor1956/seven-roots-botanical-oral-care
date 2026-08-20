@@ -99,6 +99,47 @@ test("Zoho adapter creates and confirms an idempotent paid sales order", async (
   assert.equal(requests.some((request) => request.url.pathname.endsWith("/status/confirmed")), true);
 });
 
+test("Zoho adapter creates and completes an idempotent warehouse transfer order", async () => {
+  const requests = [];
+  const fetchMock = async (input, options = {}) => {
+    const url = new URL(input);
+    requests.push({ url, options });
+    if (url.hostname === "accounts.zoho.com") return jsonResponse({ access_token: "temporary_access_token", expires_in_sec: 3600 });
+    if (url.pathname.endsWith("/transferorders") && options.method === "GET") {
+      return jsonResponse({ code: 0, transfer_orders: [], page_context: { has_more_page: false } });
+    }
+    if (url.pathname.endsWith("/transferorders") && options.method === "POST") {
+      const body = JSON.parse(options.body);
+      assert.equal(body.transfer_order_number, "SR-TR-20260820-ROOTS");
+      assert.equal(body.from_location_id, "loc_liberia");
+      assert.equal(body.to_location_id, "loc_us");
+      assert.equal(body.line_items[0].item_id, "item_r05");
+      assert.equal(body.line_items[0].quantity_transfer, 12);
+      return jsonResponse({ code: 0, transfer_order: {
+        transfer_order_id: "transfer_123",
+        transfer_order_number: body.transfer_order_number,
+        status: "draft"
+      } }, 201);
+    }
+    if (url.pathname.endsWith("/transferorders/transfer_123/intransit")) return jsonResponse({ code: 0, message: "in transit" });
+    if (url.pathname.endsWith("/transferorders/transfer_123/markastransferred")) return jsonResponse({ code: 0, message: "transferred" });
+    throw new Error(`Unexpected Zoho test URL: ${url}`);
+  };
+
+  const zoho = new ZohoInventory(connectedOptions(fetchMock));
+  const result = await zoho.createTransferOrder({
+    transferNumber: "SR-TR-20260820-ROOTS",
+    createdAt: "2026-08-20T12:00:00.000Z",
+    notes: "Liberia replenishment",
+    items: [{ formatSlug: "daily-ritual", formatName: "Daily Ritual", sku: "SR-R05", quantity: 12 }]
+  }, [{ formatSlug: "daily-ritual", zohoItemId: "item_r05", zohoItemName: "Daily Ritual" }]);
+  assert.equal(result.transferOrderId, "transfer_123");
+  await zoho.markTransferInTransit(result.transferOrderId);
+  await zoho.markTransferReceived(result.transferOrderId);
+  assert.equal(requests.some((request) => request.url.pathname.endsWith("/intransit")), true);
+  assert.equal(requests.some((request) => request.url.pathname.endsWith("/markastransferred")), true);
+});
+
 test("Zoho adapter rejects non-Zoho API domains", () => {
   assert.throws(
     () => new ZohoInventory({ ...connectedOptions(async () => jsonResponse({})), apiBaseUrl: "https://example.com/inventory/v1" }),

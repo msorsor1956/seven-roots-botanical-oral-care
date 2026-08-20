@@ -35,6 +35,9 @@ The Railway deployment serves the frontend and API from one Node process. The Gi
 - Atomic private JSON storage with restrictive file permissions
 - API-key protected admin endpoints
 - Private `/admin` commerce dashboard with orders, inventory controls, financial reports, payment records, leads, and CSV export
+- Individual employee accounts with expiring one-time invitations, password hashing, secure sessions, CSRF protection, lockout controls, and access deactivation
+- Role- and location-scoped `/staff` operations portal for Liberia warehouse, U.S. fulfillment, finance, support, audit, and ownership teams
+- Assigned work queues, two-person physical count approval, Liberia-to-U.S. transfer custody, paid-order fulfillment states, and append-only operational audit history
 - Signed Stripe webhook processing with idempotent order numbers and a separate payment ledger
 - Optional per-format stock tracking with Checkout reservations, expiry release, low-stock states, and adjustment history
 - Connection-ready Zoho Inventory bridge with OAuth refresh, exact SKU validation, Liberia/U.S. location stock, and a safe activation gate
@@ -56,6 +59,7 @@ Open:
 
 - Storefront: `http://localhost:8080`
 - Admin: `http://localhost:8080/admin`
+- Staff operations: `http://localhost:8080/staff`
 - Health: `http://localhost:8080/api/v1/health`
 
 Environment variables are not loaded automatically from `.env`; export them in your shell or configure them in Railway.
@@ -136,13 +140,25 @@ The deployed code can remain disconnected safely. It never accepts Zoho credenti
 1. In Zoho Inventory, create the three items with the exact SKUs `SR-T01`, `SR-R05`, and `SR-F12`.
 2. Create a Liberia source location and a U.S. fulfillment location, then copy both location IDs.
 3. Create a dedicated `SEVEN ROOTS Online Store` customer and copy its customer ID. Paid web orders are filed against this customer while the Stripe order number remains the unique Zoho sales-order reference.
-4. Register a Zoho server-based OAuth client and issue an offline refresh token with only these scopes: `ZohoInventory.items.READ`, `ZohoInventory.settings.READ`, `ZohoInventory.contacts.READ`, `ZohoInventory.salesorders.CREATE`, `ZohoInventory.salesorders.READ`, and `ZohoInventory.salesorders.UPDATE`.
+4. Register a Zoho server-based OAuth client and issue an offline refresh token with only these scopes: `ZohoInventory.items.READ`, `ZohoInventory.settings.READ`, `ZohoInventory.contacts.READ`, `ZohoInventory.salesorders.CREATE`, `ZohoInventory.salesorders.READ`, `ZohoInventory.salesorders.UPDATE`, `ZohoInventory.transferorders.CREATE`, `ZohoInventory.transferorders.READ`, and `ZohoInventory.transferorders.UPDATE`.
 5. Add the variables above in Railway, leaving `ZOHO_INVENTORY_ENABLED=false`.
 6. Open `/admin`, run **Test connection**, and verify both locations plus all three SKU mappings.
 7. Run **Sync inventory** in readiness mode. This displays both warehouse counts without changing checkout.
 8. Set `ZOHO_INVENTORY_ENABLED=true` in Railway, redeploy, and run **Sync inventory** again. Verified U.S. sellable counts then become the checkout authority, while Liberia quantities remain visible for replenishment planning.
 
-Every signed paid Stripe order enters a durable outbox. When Zoho is enabled, the backend creates or finds the matching Zoho sales order by the SEVEN ROOTS order number, confirms it, and records the Zoho sales-order ID. Failed exports remain visible and can be retried from the admin dashboard. This follows Zoho's official [OAuth](https://www.zoho.com/inventory/api/v1/oauth/), [Items](https://www.zoho.com/inventory/api/v1/items/), [Locations](https://www.zoho.com/inventory/api/v1/locations/), and [Sales Orders](https://www.zoho.com/inventory/api/v1/salesorders/) API contracts.
+Every signed paid Stripe order enters a durable outbox. When Zoho is enabled, the backend creates or finds the matching Zoho sales order by the SEVEN ROOTS order number, confirms it, and records the Zoho sales-order ID. Approved Liberia-to-U.S. replenishment records similarly create idempotent Zoho transfer orders and follow their in-transit and received states. Failed exports remain visible and can be retried from the admin dashboard. This follows Zoho's official [OAuth](https://www.zoho.com/inventory/api/v1/oauth/), [Items](https://www.zoho.com/inventory/api/v1/items/), [Locations](https://www.zoho.com/inventory/api/v1/locations/), [Sales Orders](https://www.zoho.com/inventory/api/v1/salesorders/), and [Transfer Orders](https://www.zoho.com/inventory/api/v1/transferorders/) API contracts.
+
+### Add employees and staff
+
+The `ADMIN_API_KEY` remains the owner recovery and bootstrap credential. Use it to open `/admin`, then use **Staff operations** to create each person's individual account:
+
+1. Enter the employee's name and work email.
+2. Choose the least-privilege job role and permitted location. Location rules are enforced by the backend, not only hidden in the browser.
+3. Copy the one-time invitation URL immediately and send it to that employee through a trusted channel. Only its hash is stored, and a new invitation invalidates the previous one.
+4. The employee opens the link, creates a password of at least 12 characters, and then works from `/staff`.
+5. Deactivate an employee from `/admin` as soon as access should end. Existing sessions are revoked.
+
+Suggested operating assignment: Liberia warehouse staff submit receiving, quality, packing, and count work; a Liberia manager approves counts and dispatches replenishment; U.S. fulfillment receives transfers and advances paid orders through picking, packing, shipment, and delivery; finance and audit roles remain read-only for operational changes. Physical inventory counts require a different approving employee.
 
 Railway configuration follows the official [Config as Code](https://docs.railway.com/config-as-code/reference), [healthcheck](https://docs.railway.com/deployments/healthchecks), and [public networking](https://docs.railway.com/networking/public-networking) guidance.
 

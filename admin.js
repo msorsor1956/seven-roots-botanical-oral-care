@@ -11,6 +11,8 @@
   let apiKey = sessionStorage.getItem('seven-roots-admin-key') || '';
   let collections = { orders: [], payments: [], inventory: [], waitlist: [], inquiries: [] };
   let currentZohoStatus = { configured: false, enabled: false, inventoryAuthority: false, mappings: [] };
+  let staffUsers = [];
+  let staffRoles = [];
 
   const setStatus = (element, message, isError = false) => {
     element.textContent = message;
@@ -443,9 +445,105 @@
     });
   };
 
+  const showStaffInvitation = (data) => {
+    const panel = qs('[data-staff-invite]');
+    const input = qs('[data-staff-invite-url]');
+    input.value = data.invitationUrl;
+    qs('[data-staff-invite-expiry]').textContent = `Expires ${formatDate(data.expiresAt)}`;
+    panel.hidden = false;
+    input.focus();
+    input.select();
+  };
+
+  const renderStaff = (users, roles) => {
+    staffUsers = users;
+    staffRoles = roles;
+    const roleById = new Map(roles.map((role) => [role.id, role]));
+    const roleSelect = qs('[data-staff-role]');
+    const selectedRole = roleSelect.value;
+    roleSelect.replaceChildren(new Option('Choose a role', ''));
+    roles.forEach((role) => roleSelect.append(new Option(role.label, role.id)));
+    roleSelect.value = selectedRole;
+
+    const managerSelect = qs('[data-staff-manager]');
+    const selectedManager = managerSelect.value;
+    managerSelect.replaceChildren(new Option('No manager selected', ''));
+    users.filter((user) => user.status === 'active').forEach((user) => {
+      managerSelect.append(new Option(`${user.name} (${user.roleLabel})`, user.id));
+    });
+    managerSelect.value = selectedManager;
+
+    qs('[data-staff-total]').textContent = `${users.length} employee${users.length === 1 ? '' : 's'}`;
+    const body = qs('[data-staff-body]');
+    body.replaceChildren();
+    if (!users.length) {
+      const row = body.insertRow();
+      const cell = row.insertCell();
+      cell.colSpan = 5;
+      cell.textContent = 'No employee accounts yet. Create the owner account first.';
+      return;
+    }
+
+    users.forEach((user) => {
+      const row = body.insertRow();
+      const identity = row.insertCell();
+      const name = document.createElement('strong');
+      name.textContent = user.name;
+      const email = document.createElement('a');
+      email.href = `mailto:${user.email}`;
+      email.textContent = user.email;
+      const number = document.createElement('small');
+      number.textContent = user.employeeNumber;
+      identity.append(name, email, number);
+
+      const roleCell = row.insertCell();
+      roleCell.textContent = roleById.get(user.role)?.label || user.roleLabel;
+      const locationsCell = row.insertCell();
+      locationsCell.textContent = user.locations.map((location) => location === 'us' ? 'U.S.' : 'Liberia').join(', ');
+      addStatusCell(row, user.status);
+
+      const actionsCell = row.insertCell();
+      const actions = document.createElement('div');
+      actions.className = 'staff-row-actions';
+      const status = document.createElement('select');
+      status.setAttribute('aria-label', `Access status for ${user.name}`);
+      ['active', 'inactive'].forEach((value) => status.append(new Option(statusLabel(value), value)));
+      status.value = user.status === 'invited' ? 'active' : user.status;
+      const save = document.createElement('button');
+      save.type = 'button';
+      save.textContent = 'Save';
+      save.addEventListener('click', async () => {
+        save.disabled = true;
+        try {
+          await api(`/api/v1/admin/staff/${encodeURIComponent(user.id)}`, { method: 'PATCH', body: { status: status.value } });
+          await loadDashboard();
+          setStatus(qs('[data-staff-form-status]'), `${user.name}'s access was updated.`);
+        } catch (error) {
+          setStatus(qs('[data-staff-form-status]'), error.message, true);
+        } finally { save.disabled = false; }
+      });
+      const invite = document.createElement('button');
+      invite.type = 'button';
+      invite.textContent = user.status === 'invited' ? 'New link' : 'Reset access';
+      invite.disabled = user.status === 'inactive';
+      invite.addEventListener('click', async () => {
+        invite.disabled = true;
+        try {
+          const data = await api(`/api/v1/admin/staff/${encodeURIComponent(user.id)}/invitations`, { method: 'POST' });
+          showStaffInvitation(data);
+          await loadDashboard();
+        } catch (error) {
+          setStatus(qs('[data-staff-form-status]'), error.message, true);
+        } finally { invite.disabled = user.status === 'inactive'; }
+      });
+      actions.append(status, save, invite);
+      actionsCell.append(actions);
+    });
+  };
+
   const loadDashboard = async () => {
     setStatus(dashboardStatus, 'Refreshing private commerce data…');
-    const [summary, financialReport, zohoStatus, inventory, payments, orders, waitlist, inquiries] = await Promise.all([
+    const [summary, financialReport, zohoStatus, inventory, payments, orders, waitlist, inquiries, staff, roles] = await Promise.all([
       api('/api/v1/admin/summary'),
       api('/api/v1/admin/financial-report'),
       api('/api/v1/admin/zoho/status'),
@@ -453,7 +551,9 @@
       api('/api/v1/admin/payments?limit=500'),
       api('/api/v1/admin/orders?limit=500'),
       api('/api/v1/admin/waitlist?limit=500'),
-      api('/api/v1/admin/inquiries?limit=500')
+      api('/api/v1/admin/inquiries?limit=500'),
+      api('/api/v1/admin/staff'),
+      api('/api/v1/admin/staff/roles')
     ]);
     collections = { orders, payments, inventory, waitlist, inquiries };
     renderSummary(summary);
@@ -464,6 +564,7 @@
     renderOrders(orders);
     renderWaitlist(waitlist);
     renderInquiries(inquiries);
+    renderStaff(staff, roles);
     setStatus(dashboardStatus, `Updated ${new Date().toLocaleTimeString()}.`);
   };
 
@@ -491,6 +592,63 @@
   });
 
   qs('[data-refresh]').addEventListener('click', () => loadDashboard().catch((error) => setStatus(dashboardStatus, error.message, true)));
+
+  const staffForm = qs('[data-staff-form]');
+  const staffRoleSelect = qs('[data-staff-role]');
+  const applyStaffRoleLocations = () => {
+    const role = staffRoles.find((item) => item.id === staffRoleSelect.value);
+    qsa('input[name="locations"]', staffForm).forEach((checkbox) => {
+      const allowed = Boolean(role?.allowedLocations.includes(checkbox.value));
+      checkbox.disabled = !allowed;
+      checkbox.checked = Boolean(role?.defaultLocations.includes(checkbox.value));
+    });
+    if (role?.defaultLocations.length === 1) {
+      staffForm.elements.country.value = role.defaultLocations[0] === 'liberia' ? 'Liberia' : 'United States';
+    }
+  };
+  staffRoleSelect.addEventListener('change', applyStaffRoleLocations);
+
+  staffForm.addEventListener('submit', async (event) => {
+    event.preventDefault();
+    const button = qs('button[type="submit"]', staffForm);
+    const form = new FormData(staffForm);
+    const locations = form.getAll('locations').map(String);
+    button.disabled = true;
+    setStatus(qs('[data-staff-form-status]'), 'Creating a secure one-time invitation...');
+    try {
+      const data = await api('/api/v1/admin/staff', {
+        method: 'POST',
+        body: {
+          name: form.get('name'),
+          email: form.get('email'),
+          role: form.get('role'),
+          country: form.get('country'),
+          locations,
+          managerId: form.get('managerId')
+        }
+      });
+      staffForm.reset();
+      showStaffInvitation(data);
+      await loadDashboard();
+      setStatus(qs('[data-staff-form-status]'), `${data.user.name} was added. Copy the invitation link now.`);
+    } catch (error) {
+      const detail = Object.values(error.details || {})[0];
+      setStatus(qs('[data-staff-form-status]'), detail || error.message, true);
+    } finally { button.disabled = false; }
+  });
+
+  qs('[data-copy-staff-invite]').addEventListener('click', async (event) => {
+    const input = qs('[data-staff-invite-url]');
+    try {
+      await navigator.clipboard.writeText(input.value);
+      event.currentTarget.textContent = 'Copied';
+    } catch {
+      input.focus();
+      input.select();
+      document.execCommand('copy');
+      event.currentTarget.textContent = 'Copied';
+    }
+  });
 
   const runZohoAction = async (button, path, pendingMessage, successMessage) => {
     const connectorStatus = qs('[data-zoho-status]');

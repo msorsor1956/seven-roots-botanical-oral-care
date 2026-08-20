@@ -1,0 +1,132 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="theme-color" content="#102b24">
+  <meta name="robots" content="noindex, nofollow">
+  <title>SEVEN ROOTS | Staff Operations</title>
+  <link rel="icon" href="assets/seven-roots-mark.svg" type="image/svg+xml">
+  <link rel="stylesheet" href="staff.css">
+</head>
+<body>
+  <a class="skip" href="#staff-main">Skip to work area</a>
+  <header class="staff-header">
+    <a class="staff-brand" href="./" aria-label="Open the Seven Roots storefront">
+      <img src="assets/seven-roots-mark.svg" alt="" width="42" height="42">
+      <span><b>SEVEN ROOTS</b><small>STAFF OPERATIONS</small></span>
+    </a>
+    <div class="session-actions" data-session-actions hidden>
+      <span data-session-identity></span>
+      <button type="button" data-refresh>Refresh</button>
+      <button type="button" data-sign-out>Sign out</button>
+    </div>
+  </header>
+
+  <main id="staff-main">
+    <section class="access-shell" data-access-shell>
+      <div class="access-intro">
+        <img src="assets/seven-roots-mark.svg" alt="" width="78" height="78">
+        <p class="kicker">Warehouse and fulfillment</p>
+        <h1>One team. Two locations.</h1>
+        <p>Complete assigned work, record physical counts, move stock from Liberia, and fulfill U.S. orders with individual accountability.</p>
+      </div>
+
+      <form class="access-form" data-login-form>
+        <div><p class="form-label">Staff sign in</p><h2>Open your workspace</h2></div>
+        <label><span>Work email</span><input name="email" type="email" autocomplete="username" required></label>
+        <label><span>Password</span><input name="password" type="password" autocomplete="current-password" required></label>
+        <button type="submit">Sign in</button>
+        <p class="access-status" data-login-status role="status" aria-live="polite"></p>
+      </form>
+
+      <form class="access-form" data-invite-form hidden>
+        <div><p class="form-label">Account invitation</p><h2>Create your password</h2></div>
+        <input name="token" type="hidden">
+        <label><span>New password</span><input name="password" type="password" autocomplete="new-password" minlength="12" maxlength="128" required></label>
+        <label><span>Confirm password</span><input name="confirmation" type="password" autocomplete="new-password" minlength="12" maxlength="128" required></label>
+        <small>Use at least 12 characters. Never reuse your Stripe, Zoho, or personal email password.</small>
+        <button type="submit">Activate account</button>
+        <p class="access-status" data-invite-status role="status" aria-live="polite"></p>
+      </form>
+    </section>
+
+    <section class="operations" data-operations hidden>
+      <div class="operations-heading">
+        <div><p class="kicker" data-location-label>Assigned workspace</p><h1 data-welcome>Welcome back.</h1></div>
+        <p>Work shown here is limited by your role and assigned location. Every completed action is added to the company audit history.</p>
+      </div>
+
+      <section class="metric-strip" aria-label="Work summary">
+        <article><span>Open tasks</span><b data-metric="openTasks">0</b></article>
+        <article><span>Urgent tasks</span><b data-metric="urgentTasks">0</b></article>
+        <article><span>Active transfers</span><b data-metric="activeTransfers">0</b></article>
+        <article><span>Orders to fulfill</span><b data-metric="ordersToFulfill">0</b></article>
+        <article><span>Counts pending</span><b data-metric="pendingCounts">0</b></article>
+        <article><span>Low stock</span><b data-metric="lowStock">0</b></article>
+      </section>
+
+      <nav class="workspace-nav" aria-label="Staff workspace" data-workspace-nav>
+        <button type="button" data-view="work" aria-current="page">My work</button>
+        <button type="button" data-view="inventory">Inventory</button>
+        <button type="button" data-view="transfers">Transfers</button>
+        <button type="button" data-view="orders">Orders</button>
+        <button type="button" data-view="finance">Finance</button>
+        <button type="button" data-view="audit">Audit</button>
+      </nav>
+
+      <section class="workspace-view" data-workspace-view="work">
+        <div class="view-heading"><div><h2>Work queue</h2><p>Claim open work, record progress, and leave a clear handoff note.</p></div></div>
+        <form class="task-compose" data-task-form hidden>
+          <label><span>Task title</span><input name="title" maxlength="140" required></label>
+          <label><span>Type</span><select name="type"><option value="receiving">Receiving</option><option value="quality">Quality check</option><option value="packing">Packing</option><option value="stock_count">Stock count</option><option value="transfer">Transfer</option><option value="fulfillment">Fulfillment</option><option value="returns">Returns</option><option value="support">Support</option><option value="finance">Finance</option><option value="general">General</option></select></label>
+          <label><span>Location</span><select name="location" data-task-location></select></label>
+          <label><span>Priority</span><select name="priority"><option value="normal">Normal</option><option value="urgent">Urgent</option></select></label>
+          <label class="task-description"><span>Instructions</span><input name="description" maxlength="1000"></label>
+          <button type="submit">Add task</button>
+        </form>
+        <div class="task-list" data-task-list><p class="empty">Loading work...</p></div>
+      </section>
+
+      <section class="workspace-view" data-workspace-view="inventory" hidden>
+        <div class="view-heading"><div><h2>Physical inventory</h2><p>Submit counts for manager review. Zoho-controlled counts reconcile after the next inventory sync.</p></div><span class="source-badge" data-inventory-source>Checking source</span></div>
+        <div class="inventory-grid" data-staff-inventory><p class="empty">Loading inventory...</p></div>
+        <div class="subsection-heading"><h3>Count approvals</h3><p>A second authorized employee must approve every physical count.</p></div>
+        <div class="count-list" data-count-list><p class="empty">No counts submitted.</p></div>
+      </section>
+
+      <section class="workspace-view" data-workspace-view="transfers" hidden>
+        <div class="view-heading"><div><h2>Liberia to U.S. transfers</h2><p>Prepare, approve, dispatch, receive, and reconcile cross-border stock movements.</p></div></div>
+        <form class="transfer-compose" data-transfer-form hidden>
+          <div><h3>Prepare transfer</h3><p>Enter packed quantities. The owner approves before dispatch.</p></div>
+          <label><span>Travel Sleeve</span><input name="travel-sleeve" type="number" min="0" max="1000000" value="0"></label>
+          <label><span>Daily Ritual</span><input name="daily-ritual" type="number" min="0" max="1000000" value="0"></label>
+          <label><span>Family Reserve</span><input name="family-reserve" type="number" min="0" max="1000000" value="0"></label>
+          <label class="transfer-notes"><span>Freight reference</span><input name="freightReference" maxlength="120"></label>
+          <label class="transfer-notes"><span>Notes</span><input name="notes" maxlength="500"></label>
+          <button type="submit">Create draft</button>
+        </form>
+        <div class="transfer-list" data-transfer-list><p class="empty">No transfers yet.</p></div>
+      </section>
+
+      <section class="workspace-view" data-workspace-view="orders" hidden>
+        <div class="view-heading"><div><h2>Paid order fulfillment</h2><p>Move each paid order through picking, packing, shipment, and delivery.</p></div></div>
+        <div class="order-list" data-staff-orders><p class="empty">No accessible paid orders.</p></div>
+      </section>
+
+      <section class="workspace-view" data-workspace-view="finance" hidden>
+        <div class="view-heading"><div><h2>Financial overview</h2><p>Stripe-collected sales and refunds. Card data is never stored here.</p></div></div>
+        <div class="finance-summary" data-staff-finance><p class="empty">Financial access is not assigned to this role.</p></div>
+      </section>
+
+      <section class="workspace-view" data-workspace-view="audit" hidden>
+        <div class="view-heading"><div><h2>Activity history</h2><p>Employee, action, location, and time for operational changes.</p></div></div>
+        <div class="audit-list" data-audit-list><p class="empty">Audit access is not assigned to this role.</p></div>
+      </section>
+
+      <p class="workspace-status" data-workspace-status role="status" aria-live="polite"></p>
+    </section>
+  </main>
+  <script src="staff.js" defer></script>
+</body>
+</html>
