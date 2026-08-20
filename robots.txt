@@ -1,4 +1,4 @@
 User-agent: *
 Allow: /
 
-Sitemap: https://msorsor1956.github.io/seven-roots-botanical-oral-care/sitemap.xml
+Sitemap: https://seven-roots-botanical-oral-care-production.up.railway.app/sitemap.xml

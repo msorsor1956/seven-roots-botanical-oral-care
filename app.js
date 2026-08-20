@@ -128,29 +128,134 @@
     catch { copyStatus.textContent = `Copy manually: ${value}.`; }
   }));
 
+  const apiBase = qs('meta[name="seven-roots-api-base"]')?.content.replace(/\/$/u, '') || '';
+  const postJson = async (path, body) => {
+    const response = await fetch(`${apiBase}${path}`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', accept: 'application/json' },
+      body: JSON.stringify(body)
+    });
+    const payload = await response.json().catch(() => ({}));
+    if (!response.ok) {
+      const error = new Error(payload.error?.message || 'The request could not be completed.');
+      error.details = payload.error?.details || {};
+      throw error;
+    }
+    return payload;
+  };
+
+  const clearFormErrors = (form) => {
+    qsa('[aria-invalid="true"]', form).forEach((field) => field.removeAttribute('aria-invalid'));
+    qsa('.field-error', form).forEach((error) => error.remove());
+    qs('.consent-row', form)?.classList.remove('is-invalid');
+  };
+
+  const showFormErrors = (form, errors = {}) => {
+    Object.entries(errors).forEach(([name, message]) => {
+      if (name === 'consent') {
+        qs('.consent-row', form)?.classList.add('is-invalid');
+        return;
+      }
+      const field = form.elements.namedItem(name);
+      if (!(field instanceof HTMLElement)) return;
+      field.setAttribute('aria-invalid', 'true');
+      const error = document.createElement('span');
+      error.className = 'field-error';
+      error.textContent = String(message);
+      field.closest('label')?.append(error);
+    });
+  };
+
+  const setSubmitState = (form, busy) => {
+    const submit = qs('button[type="submit"]', form);
+    if (!submit) return;
+    submit.disabled = busy;
+    if (!submit.dataset.label) submit.dataset.label = submit.textContent;
+    submit.textContent = busy ? 'Sending…' : submit.dataset.label;
+  };
+
+  const setStatus = (status, message, kind = '') => {
+    if (!status) return;
+    status.textContent = message;
+    status.classList.toggle('is-error', kind === 'error');
+    status.classList.toggle('is-success', kind === 'success');
+  };
+
   const dialog = qs('[data-dialog]');
   const dialogForm = qs('[data-dialog-form]');
   const dialogContent = qs('[data-dialog-content]');
   const dialogSuccess = qs('[data-dialog-success]');
   const successCopy = qs('[data-success-copy]');
+  const dialogStatus = qs('[data-dialog-status]');
   qsa('[data-open-ritual]').forEach((button) => button.addEventListener('click', () => {
     const radio = qs(`input[name="pack"][value="${selectedPack}"]`);
     if (radio) radio.checked = true;
+    clearFormErrors(dialogForm);
+    setStatus(dialogStatus, '');
     dialogContent.hidden = false; dialogSuccess.hidden = true;
     if (typeof dialog.showModal === 'function') dialog.showModal();
   }));
-  dialogForm?.addEventListener('submit', (event) => {
+  dialogForm?.addEventListener('submit', async (event) => {
     const submitter = event.submitter;
     if (submitter?.value === 'cancel' || submitter?.value === 'close') return;
     event.preventDefault();
-    const value = new FormData(dialogForm).get('pack') || selectedPack;
+    clearFormErrors(dialogForm);
+    const formData = new FormData(dialogForm);
+    const value = formData.get('pack') || selectedPack;
     updatePack(String(value));
-    dialogContent.hidden = true; dialogSuccess.hidden = false;
-    successCopy.textContent = `${value} is your selected pre-launch format.`;
+    setSubmitState(dialogForm, true);
+    setStatus(dialogStatus, 'Adding you to the private pre-launch list…');
+    try {
+      const payload = await postJson('/api/v1/waitlist', {
+        name: formData.get('name'),
+        email: formData.get('email'),
+        country: formData.get('country'),
+        preferredFormat: value,
+        website: formData.get('website'),
+        consent: formData.get('consent') === 'on',
+        source: 'website-dialog'
+      });
+      dialogContent.hidden = true; dialogSuccess.hidden = false;
+      successCopy.textContent = `${value} is saved as your preference. ${payload.message}`;
+    } catch (error) {
+      showFormErrors(dialogForm, error.details);
+      setStatus(dialogStatus, `${error.message} Your format is still saved on this device.`, 'error');
+    } finally {
+      setSubmitState(dialogForm, false);
+    }
   });
   dialog?.addEventListener('click', (event) => {
     const rect = dialog.getBoundingClientRect();
     const outside = event.clientX < rect.left || event.clientX > rect.right || event.clientY < rect.top || event.clientY > rect.bottom;
     if (outside) dialog.close();
+  });
+
+  const inquiryForm = qs('[data-inquiry-form]');
+  const inquiryStatus = qs('[data-inquiry-status]');
+  inquiryForm?.addEventListener('submit', async (event) => {
+    event.preventDefault();
+    clearFormErrors(inquiryForm);
+    const formData = new FormData(inquiryForm);
+    setSubmitState(inquiryForm, true);
+    setStatus(inquiryStatus, 'Sending your inquiry…');
+    try {
+      const payload = await postJson('/api/v1/inquiries', {
+        name: formData.get('name'),
+        email: formData.get('email'),
+        phone: formData.get('phone'),
+        organization: formData.get('organization'),
+        inquiryType: formData.get('inquiryType'),
+        message: formData.get('message'),
+        website: formData.get('website'),
+        consent: formData.get('consent') === 'on'
+      });
+      inquiryForm.reset();
+      setStatus(inquiryStatus, payload.message || 'Your inquiry was received.', 'success');
+    } catch (error) {
+      showFormErrors(inquiryForm, error.details);
+      setStatus(inquiryStatus, error.message, 'error');
+    } finally {
+      setSubmitState(inquiryForm, false);
+    }
   });
 })();

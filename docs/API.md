@@ -1,0 +1,100 @@
+# SEVEN ROOTS API
+
+Base path: `/api/v1`
+
+Every response is JSON except static storefront and admin files. Error responses use:
+
+```json
+{
+  "error": {
+    "code": "validation_failed",
+    "message": "Check the highlighted fields.",
+    "details": {
+      "email": "Enter a valid email address."
+    },
+    "requestId": "..."
+  }
+}
+```
+
+## Public endpoints
+
+### Health
+
+```http
+GET /api/v1/health
+```
+
+Returns `200` when the web process and private file store have initialized.
+
+### Product formats
+
+```http
+GET /api/v1/formats
+GET /api/v1/formats/daily-ritual
+```
+
+The catalog returns `pricing: null` until pricing has been approved.
+
+### Join the pre-launch list
+
+```http
+POST /api/v1/waitlist
+Content-Type: application/json
+
+{
+  "name": "Amina Johnson",
+  "email": "amina@example.com",
+  "preferredFormat": "daily-ritual",
+  "country": "United States",
+  "source": "website-dialog",
+  "consent": true,
+  "website": ""
+}
+```
+
+`preferredFormat` accepts a product slug or product name. A repeat email updates the existing preference instead of creating a duplicate.
+
+### Send a partner inquiry
+
+```http
+POST /api/v1/inquiries
+Content-Type: application/json
+
+{
+  "name": "Retail Buyer",
+  "email": "buyer@example.com",
+  "phone": "+1 317 555 0100",
+  "organization": "Example Market",
+  "inquiryType": "wholesale",
+  "message": "I would like to discuss carrying the Daily Ritual format.",
+  "consent": true,
+  "website": ""
+}
+```
+
+Allowed inquiry types: `wholesale`, `retail`, `press`, `sourcing`, and `general`.
+
+## Private admin endpoints
+
+Set `ADMIN_API_KEY` and send it as a bearer token.
+
+```http
+Authorization: Bearer YOUR_ADMIN_API_KEY
+```
+
+Endpoints:
+
+- `GET /api/v1/admin/summary`
+- `GET /api/v1/admin/waitlist?limit=500`
+- `GET /api/v1/admin/inquiries?limit=500`
+
+The browser dashboard at `/admin` uses these endpoints. The key is held in `sessionStorage`, not persistent browser storage.
+
+## Limits and privacy
+
+- JSON request bodies are limited to 32 KB.
+- Public write endpoints are limited to 20 submissions per IP per 15 minutes.
+- Honeypot submissions are accepted without storing their content.
+- Admin data is never returned by public endpoints.
+- The storage file is created with owner-only permissions and should live on a Railway volume mounted at `/data`.

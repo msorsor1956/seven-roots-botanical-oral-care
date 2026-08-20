@@ -259,6 +259,36 @@ h3 { line-height: 1.14; }
 .palette b { color: var(--muted); font-family: ui-monospace, SFMono-Regular, Consolas, monospace; font-size: 10px; }
 .copy-note { margin: 12px 0 0; color: var(--muted); font-size: 10px; }
 
+.inquiry { display: grid; grid-template-columns: .82fr 1.18fr; gap: clamp(48px,8vw,130px); color: #fff; background: #17251f; }
+.inquiry-intro { align-self: start; }
+.inquiry-intro h2 { margin-bottom: 24px; }
+.inquiry-intro > p:last-of-type { color: #b8c4bc; }
+.inquiry-intro dl { margin: 44px 0 0; }
+.inquiry-intro dl div { display: grid; grid-template-columns: 92px 1fr; gap: 18px; padding: 13px 0; border-top: 1px solid rgba(255,255,255,.13); }
+.inquiry-intro dt { color: var(--brass); font-size: 10px; font-weight: 900; text-transform: uppercase; letter-spacing: .11em; }
+.inquiry-intro dd { margin: 0; color: #d5ddd7; font-size: 12px; }
+.inquiry-form { padding: clamp(24px,4vw,46px); border: 1px solid rgba(255,255,255,.14); border-radius: 22px; background: rgba(255,255,255,.045); }
+.form-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 18px; }
+.form-grid label, .dialog-fields label { display: grid; gap: 8px; }
+.form-grid label > span, .dialog-fields label > span { color: #cbd5ce; font-size: 10px; font-weight: 900; text-transform: uppercase; letter-spacing: .08em; }
+.form-grid small, .dialog-fields small { color: #89968e; font-size: 9px; }
+.form-wide { grid-column: 1/-1; }
+.form-grid input, .form-grid select, .form-grid textarea, .dialog-fields input { width: 100%; min-height: 50px; padding: 12px 14px; border: 1px solid rgba(255,255,255,.2); border-radius: 9px; color: #fff; background: rgba(255,255,255,.06); font: inherit; font-size: 14px; outline: none; transition: border-color .2s var(--ease), box-shadow .2s var(--ease); }
+.form-grid textarea { resize: vertical; }
+.form-grid select { color-scheme: dark; }
+.form-grid input:focus, .form-grid select:focus, .form-grid textarea:focus { border-color: var(--brass); box-shadow: 0 0 0 3px rgba(180,138,74,.18); }
+.form-grid [aria-invalid="true"], .dialog-fields [aria-invalid="true"] { border-color: #ef9b83; box-shadow: 0 0 0 3px rgba(239,155,131,.14); }
+.field-error { color: #ffc2b1 !important; font-size: 10px !important; font-weight: 700 !important; text-transform: none !important; letter-spacing: 0 !important; }
+.consent-row { display: flex; align-items: flex-start; gap: 10px; margin: 22px 0; color: #c5d0c8; font-size: 11px; line-height: 1.55; }
+.consent-row input { flex: 0 0 auto; width: 18px; height: 18px; margin-top: 1px; accent-color: var(--clay); }
+.consent-row.is-invalid { color: #ffc2b1; }
+.form-action { display: grid; grid-template-columns: auto 1fr; align-items: center; gap: 18px; }
+.form-action .button { min-width: 170px; }
+.form-status { margin: 0; color: #9eadA4; font-size: 10px; line-height: 1.45; }
+.form-status.is-error { color: #ffc2b1; }
+.form-status.is-success { color: #d6e5c0; }
+.honeypot { position: absolute !important; left: -10000px !important; width: 1px !important; height: 1px !important; overflow: hidden !important; }
+
 .closing { min-height: 620px; display: flex; flex-direction: column; justify-content: center; align-items: center; text-align: center; color: #fff; background: radial-gradient(circle at 50% 30%, rgba(200,108,58,.28), transparent 30%), var(--forest); }
 .closing h2 { max-width: 1050px; margin: 0 auto 42px; }
 footer { display: grid; grid-template-columns: 1fr auto; gap: 28px; align-items: center; padding: 42px clamp(24px,6vw,108px); color: #c8d0ca; background: #0d211c; }
@@ -270,7 +300,7 @@ footer .legal { grid-column: 1/-1; max-width: 900px; color: #7f928a; text-transf
 .mobile-rail { display: none; }
 .ritual-dialog { width: min(590px, calc(100% - 28px)); max-height: calc(100vh - 30px); padding: 0; border: 0; border-radius: 24px; color: var(--ink); background: var(--paper); box-shadow: 0 40px 130px rgba(0,0,0,.35); }
 .ritual-dialog::backdrop { background: rgba(8,24,20,.72); backdrop-filter: blur(5px); }
-.dialog-shell { position: relative; padding: 46px; }
+.dialog-shell { position: relative; max-height: calc(100vh - 30px); padding: 46px; overflow-y: auto; }
 .dialog-close { position: absolute; right: 18px; top: 16px; width: 42px; height: 42px; border: 1px solid var(--line); border-radius: 50%; color: var(--muted); background: #fff; font-size: 27px; cursor: pointer; }
 .dialog-shell h2 { margin-bottom: 18px; font-size: 51px; }
 .dialog-shell p { color: var(--muted); }
@@ -280,7 +310,15 @@ footer .legal { grid-column: 1/-1; max-width: 900px; color: #7f928a; text-transf
 .dialog-options span { display: flex; justify-content: space-between; align-items: center; padding: 17px 18px; border: 1px solid var(--line); border-radius: 11px; background: #fff; }
 .dialog-options small { color: var(--muted); }
 .dialog-options input:checked + span { border-color: var(--forest); box-shadow: inset 0 0 0 2px var(--forest); }
+.dialog-fields { display: grid; grid-template-columns: 1fr 1fr; gap: 13px; margin: 0 0 18px; }
+.dialog-fields label:nth-child(3) { grid-column: 1/-1; }
+.dialog-fields label > span { color: var(--muted); }
+.dialog-fields input { min-height: 48px; color: var(--ink); border-color: var(--line); background: #fff; }
+.dialog-fields input:focus { border-color: var(--forest); box-shadow: 0 0 0 3px rgba(23,61,50,.12); }
+.dialog-consent { margin: 4px 0 14px; color: var(--muted); }
+.dialog-shell .form-status { min-height: 16px; margin-bottom: 10px; }
 .dialog-submit { width: 100%; }
+.dialog-submit[disabled], .inquiry-form button[disabled] { cursor: wait; opacity: .62; }
 .dialog-success { padding: 50px 0 20px; text-align: center; }
 .dialog-success > span { display: grid; place-items: center; width: 72px; height: 72px; margin: auto auto 22px; border-radius: 50%; color: #fff; background: var(--forest); font-size: 31px; }
 
@@ -300,7 +338,7 @@ footer .legal { grid-column: 1/-1; max-width: 900px; color: #7f928a; text-transf
   .hero { grid-template-columns: 1fr; padding-top: 140px; }
   .hero-copy { max-width: 820px; }
   .hero-visual { width: min(900px, 92%); margin: 20px auto 0; }
-  .story-grid, .botanicals, .identity { grid-template-columns: 1fr; }
+  .story-grid, .botanicals, .identity, .inquiry { grid-template-columns: 1fr; }
   .reference-card { position: relative; top: auto; width: min(650px, 100%); }
   .exploded { grid-template-columns: 1fr; }
   .exploded-copy { max-width: 780px; }
@@ -385,6 +423,10 @@ footer .legal { grid-column: 1/-1; max-width: 900px; color: #7f928a; text-transf
   .dialog-shell { padding: 42px 20px 24px; }
   .dialog-shell h2 { font-size: 42px; }
   .dialog-options span { align-items: flex-start; flex-direction: column; }
+  .form-grid, .dialog-fields { grid-template-columns: 1fr; }
+  .dialog-fields label:nth-child(3) { grid-column: auto; }
+  .form-action { grid-template-columns: 1fr; }
+  .form-action .button { width: 100%; }
 }
 
 @media (prefers-reduced-motion: reduce) {

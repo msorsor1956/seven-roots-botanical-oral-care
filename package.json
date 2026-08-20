@@ -1,0 +1,16 @@
+{
+  "name": "seven-roots-botanical-oral-care",
+  "version": "1.1.0",
+  "private": true,
+  "description": "SEVEN ROOTS storefront and pre-launch customer-interest API",
+  "type": "module",
+  "engines": {
+    "node": ">=20"
+  },
+  "scripts": {
+    "start": "node server/index.js",
+    "dev": "NODE_ENV=development node --watch server/index.js",
+    "test": "node --test",
+    "check": "node --check server/index.js && node --check server/app.js && node --check app.js"
+  }
+}

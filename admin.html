@@ -1,0 +1,74 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="theme-color" content="#102b24">
+  <meta name="robots" content="noindex, nofollow">
+  <title>SEVEN ROOTS | Private Studio</title>
+  <link rel="icon" href="assets/seven-roots-mark.svg" type="image/svg+xml">
+  <link rel="stylesheet" href="admin.css">
+</head>
+<body>
+  <a class="skip" href="#admin-main">Skip to dashboard</a>
+  <header class="admin-header">
+    <a class="admin-brand" href="./" aria-label="Open the Seven Roots storefront">
+      <img src="assets/seven-roots-mark.svg" alt="" width="44" height="44">
+      <span><b>SEVEN ROOTS</b><small>PRIVATE STUDIO</small></span>
+    </a>
+    <div class="header-actions" data-header-actions hidden>
+      <button type="button" data-refresh>Refresh data</button>
+      <button type="button" data-logout>Lock studio</button>
+    </div>
+  </header>
+
+  <main id="admin-main">
+    <section class="login-view" data-login-view>
+      <div class="login-mark"><img src="assets/seven-roots-mark.svg" alt="" width="86" height="86"></div>
+      <p class="eyebrow">Authorized access</p>
+      <h1>Enter the private studio.</h1>
+      <p>Review pre-launch interest and partnership inquiries. The API key remains in this browser tab only and is cleared when you lock the studio.</p>
+      <form data-login-form>
+        <label><span>Admin API key</span><input name="apiKey" type="password" autocomplete="current-password" required></label>
+        <button type="submit">Unlock dashboard</button>
+        <p class="login-status" data-login-status role="status" aria-live="polite"></p>
+      </form>
+    </section>
+
+    <section class="dashboard" data-dashboard hidden>
+      <div class="dashboard-heading">
+        <div><p class="eyebrow">Launch intelligence</p><h1>Customer interest, without the noise.</h1></div>
+        <p>Live private data from the SEVEN ROOTS pre-launch API. No payment or order information is collected.</p>
+      </div>
+
+      <section class="metrics" aria-label="Launch summary">
+        <article><span>01</span><b data-total-waitlist>—</b><p>Pre-launch subscribers</p></article>
+        <article><span>02</span><b data-total-inquiries>—</b><p>Partner inquiries</p></article>
+        <article><span>03</span><b data-leading-format>—</b><p>Leading pack format</p></article>
+      </section>
+
+      <section class="interest-panel">
+        <div class="panel-heading"><div><p class="eyebrow">Format signal</p><h2>What customers prefer</h2></div><small>Unique emails</small></div>
+        <div class="interest-bars" data-interest-bars></div>
+      </section>
+
+      <section class="data-panel">
+        <div class="panel-heading"><div><p class="eyebrow">Pre-launch list</p><h2>Subscribers</h2></div><button type="button" data-export="waitlist">Export CSV</button></div>
+        <div class="table-scroll">
+          <table>
+            <thead><tr><th>Name</th><th>Email</th><th>Preferred format</th><th>Country</th><th>Joined</th></tr></thead>
+            <tbody data-waitlist-body><tr><td colspan="5">Loading subscribers…</td></tr></tbody>
+          </table>
+        </div>
+      </section>
+
+      <section class="data-panel">
+        <div class="panel-heading"><div><p class="eyebrow">Trade and sourcing</p><h2>Partner inquiries</h2></div><button type="button" data-export="inquiries">Export CSV</button></div>
+        <div class="inquiry-list" data-inquiry-list><p class="empty">Loading inquiries…</p></div>
+      </section>
+      <p class="dashboard-status" data-dashboard-status role="status" aria-live="polite"></p>
+    </section>
+  </main>
+  <script src="admin.js" defer></script>
+</body>
+</html>

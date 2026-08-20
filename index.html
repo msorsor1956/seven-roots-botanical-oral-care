@@ -7,17 +7,18 @@
   <meta name="color-scheme" content="light">
   <meta name="robots" content="index, follow">
   <meta name="description" content="Discover SEVEN ROOTS, a pre-launch African botanical oral-care collection pairing traceable natural chewing sticks with hygienic, low-waste packaging and clear ritual guidance.">
-  <link rel="canonical" href="https://msorsor1956.github.io/seven-roots-botanical-oral-care/">
+  <meta name="seven-roots-api-base" content="https://seven-roots-botanical-oral-care-production.up.railway.app">
+  <link rel="canonical" href="https://seven-roots-botanical-oral-care-production.up.railway.app/">
   <meta property="og:type" content="website">
   <meta property="og:title" content="SEVEN ROOTS | Ancient roots. Modern ritual.">
   <meta property="og:description" content="A pre-launch African botanical oral-care collection with a 360° product experience, traceable sourcing principles, and low-waste packaging.">
-  <meta property="og:url" content="https://msorsor1956.github.io/seven-roots-botanical-oral-care/">
-  <meta property="og:image" content="https://msorsor1956.github.io/seven-roots-botanical-oral-care/assets/seven-roots-packaging-family.webp">
+  <meta property="og:url" content="https://seven-roots-botanical-oral-care-production.up.railway.app/">
+  <meta property="og:image" content="https://seven-roots-botanical-oral-care-production.up.railway.app/assets/seven-roots-packaging-family.webp">
   <meta property="og:image:alt" content="SEVEN ROOTS Travel Sleeve, Daily Ritual, and Family Reserve packaging">
   <meta name="twitter:card" content="summary_large_image">
   <meta name="twitter:title" content="SEVEN ROOTS | African Botanical Oral Care">
   <meta name="twitter:description" content="Ancient roots. Modern ritual. Explore the pre-launch collection in 360°.">
-  <meta name="twitter:image" content="https://msorsor1956.github.io/seven-roots-botanical-oral-care/assets/seven-roots-packaging-family.webp">
+  <meta name="twitter:image" content="https://seven-roots-botanical-oral-care-production.up.railway.app/assets/seven-roots-packaging-family.webp">
   <title>SEVEN ROOTS | Ancient Roots. Modern Ritual.</title>
   <link rel="icon" href="assets/seven-roots-mark.svg" type="image/svg+xml">
   <link rel="stylesheet" href="styles.css">
@@ -29,8 +30,8 @@
       "name": "SEVEN ROOTS",
       "slogan": "Ancient roots. Modern ritual.",
       "description": "A pre-launch African botanical oral-care collection centered on traceable natural chewing sticks, hygienic low-waste packaging, and clear ritual guidance.",
-      "url": "https://msorsor1956.github.io/seven-roots-botanical-oral-care/",
-      "logo": "https://msorsor1956.github.io/seven-roots-botanical-oral-care/assets/seven-roots-mark.svg"
+      "url": "https://seven-roots-botanical-oral-care-production.up.railway.app/",
+      "logo": "https://seven-roots-botanical-oral-care-production.up.railway.app/assets/seven-roots-mark.svg"
     }
   </script>
 </head>
@@ -51,6 +52,7 @@
       <a href="#exploded">Inside the kit</a>
       <a href="#botanicals">Botanicals</a>
       <a href="#standards">Standards</a>
+      <a href="#partner">Partner</a>
     </nav>
     <button class="button button-small button-dark header-cta" type="button" data-open-ritual>Choose your format</button>
   </header>
@@ -306,6 +308,32 @@
       </div>
     </section>
 
+    <section class="inquiry section" id="partner" aria-labelledby="inquiry-title">
+      <div class="inquiry-intro reveal">
+        <p class="eyebrow light"><span></span> Trade and sourcing</p>
+        <h2 id="inquiry-title">Build the next chapter with us.</h2>
+        <p>Retailers, hospitality partners, distributors, press, and responsible botanical suppliers can send a direct pre-launch inquiry. Every message is stored privately for the SEVEN ROOTS team.</p>
+        <dl>
+          <div><dt>Retail</dt><dd>Stockist and hospitality interest</dd></div>
+          <div><dt>Sourcing</dt><dd>Traceable botanical and packaging partners</dd></div>
+          <div><dt>Press</dt><dd>Brand, cultural, and product-development stories</dd></div>
+        </dl>
+      </div>
+      <form class="inquiry-form reveal" data-inquiry-form novalidate>
+        <div class="form-grid">
+          <label><span>Full name</span><input name="name" type="text" autocomplete="name" maxlength="100" required></label>
+          <label><span>Email</span><input name="email" type="email" autocomplete="email" maxlength="254" required></label>
+          <label><span>Organization <small>Optional</small></span><input name="organization" type="text" autocomplete="organization" maxlength="120"></label>
+          <label><span>Phone <small>Optional</small></span><input name="phone" type="tel" autocomplete="tel" maxlength="30"></label>
+          <label class="form-wide"><span>Inquiry type</span><select name="inquiryType" required><option value="wholesale">Wholesale / retail</option><option value="sourcing">Responsible sourcing</option><option value="press">Press</option><option value="general">General</option></select></label>
+          <label class="form-wide"><span>Message</span><textarea name="message" rows="5" minlength="10" maxlength="2000" required placeholder="Tell us how you would like to work with SEVEN ROOTS."></textarea></label>
+          <label class="honeypot" aria-hidden="true">Website<input name="website" type="text" tabindex="-1" autocomplete="off"></label>
+        </div>
+        <label class="consent-row"><input name="consent" type="checkbox" required><span>I agree that SEVEN ROOTS may use these details to respond to this inquiry.</span></label>
+        <div class="form-action"><button class="button button-ivory" type="submit">Send inquiry</button><p class="form-status" data-inquiry-status role="status" aria-live="polite">Your information is used only to respond to this request.</p></div>
+      </form>
+    </section>
+
     <section class="closing section">
       <p class="eyebrow light reveal"><span></span> Ancient roots. Modern ritual.</p>
       <h2 class="reveal">A brand system built to honor where the product comes from while earning trust wherever it goes.</h2>
@@ -322,21 +350,29 @@
   <div class="mobile-rail" aria-label="Quick action"><span><b data-mobile-pack>Daily Ritual</b><small>5-stick pre-launch format</small></span><button type="button" data-open-ritual>Choose pack</button></div>
 
   <dialog class="ritual-dialog" data-dialog aria-labelledby="dialog-title">
-    <form method="dialog" class="dialog-shell" data-dialog-form>
+    <form method="dialog" class="dialog-shell" data-dialog-form novalidate>
       <button class="dialog-close" value="cancel" aria-label="Close">×</button>
       <div class="dialog-step" data-dialog-content>
         <p class="eyebrow"><span></span> Pre-launch collection</p>
         <h2 id="dialog-title">Choose your SEVEN ROOTS ritual.</h2>
-        <p>Preview your preferred format before launch. Your choice is saved only on this device; no order, account, or payment is submitted.</p>
+        <p>Choose a format and join the private pre-launch list. This is not an order and no payment is collected.</p>
         <div class="dialog-options">
           <label><input type="radio" name="pack" value="Travel Sleeve"><span><b>Travel Sleeve</b><small>1 stick · SR-T01</small></span></label>
           <label><input type="radio" name="pack" value="Daily Ritual" checked><span><b>Daily Ritual</b><small>5 sticks · SR-R05</small></span></label>
           <label><input type="radio" name="pack" value="Family Reserve"><span><b>Family Reserve</b><small>12 sticks · SR-F12</small></span></label>
         </div>
-        <button class="button button-dark dialog-submit" value="default" type="submit">Save my format</button>
+        <div class="dialog-fields">
+          <label><span>Full name</span><input name="name" type="text" autocomplete="name" maxlength="100" required></label>
+          <label><span>Email</span><input name="email" type="email" autocomplete="email" maxlength="254" required></label>
+          <label><span>Country <small>Optional</small></span><input name="country" type="text" autocomplete="country-name" maxlength="80"></label>
+          <label class="honeypot" aria-hidden="true">Website<input name="website" type="text" tabindex="-1" autocomplete="off"></label>
+        </div>
+        <label class="consent-row dialog-consent"><input name="consent" type="checkbox" required><span>I agree that SEVEN ROOTS may store these details and contact me with launch updates.</span></label>
+        <p class="form-status" data-dialog-status role="status" aria-live="polite"></p>
+        <button class="button button-dark dialog-submit" value="default" type="submit">Join the pre-launch list</button>
       </div>
       <div class="dialog-success" data-dialog-success hidden>
-        <span>✓</span><h2>Format saved on this device.</h2><p data-success-copy>Daily Ritual is your selected pre-launch format.</p><button class="text-link" value="close">Return to the collection</button>
+        <span>✓</span><h2>You’re on the list.</h2><p data-success-copy>Your Daily Ritual preference is saved, and we’ll share important launch news by email.</p><button class="text-link" value="close">Return to the collection</button>
       </div>
     </form>
   </dialog>
