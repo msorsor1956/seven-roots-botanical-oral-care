@@ -48,7 +48,7 @@ Content-Type: application/json
 }
 ```
 
-Returns a short-lived Stripe-hosted Checkout URL. Product and Price IDs are selected exclusively on the server. Quantity must be a whole number from 1 to 10.
+Returns a short-lived Stripe-hosted Checkout URL. Product and Price IDs are selected exclusively on the server. Quantity must be a whole number from 1 to 10. When a format has a configured stock count, the requested quantity is reserved before Stripe Checkout is created. Insufficient stock returns `409 insufficient_inventory`.
 
 ### Look up a public order confirmation
 
@@ -74,7 +74,7 @@ The handler verifies the signature against the unmodified raw body before proces
 - `charge.refunded`
 - `payment_intent.payment_failed`
 
-Webhook event IDs are stored for idempotency.
+Webhook event IDs are stored for idempotency. A completed payment creates a customer-facing `SR-...` order number, updates the private payment ledger, and decrements tracked inventory exactly once. Failed and expired Checkout events release active reservations.
 
 ### Join the pre-launch list
 
@@ -129,6 +129,28 @@ Endpoints:
 - `GET /api/v1/admin/waitlist?limit=500`
 - `GET /api/v1/admin/inquiries?limit=500`
 - `GET /api/v1/admin/orders?limit=500`
+- `GET /api/v1/admin/payments?limit=500`
+- `GET /api/v1/admin/inventory`
+- `GET /api/v1/admin/inventory-adjustments?limit=500`
+- `GET /api/v1/admin/financial-report`
+
+Update a physical inventory count:
+
+```http
+PATCH /api/v1/admin/inventory/daily-ritual
+Authorization: Bearer YOUR_ADMIN_API_KEY
+Content-Type: application/json
+
+{
+  "stockOnHand": 48,
+  "reorderLevel": 10,
+  "reason": "Opening physical count"
+}
+```
+
+Set `stockOnHand` to `null` to stop enforcing inventory for that format. The public catalog reports only `available` or `sold_out`; exact counts, reservations, adjustment notes, customer data, and Stripe references remain private.
+
+The financial report separates gross sales, product sales, shipping collected, tax collected, refunds, and net collected by currency. `netCollected` is before Stripe fees, fulfillment costs, and operating expenses; it is not an accounting profit figure.
 
 The browser dashboard at `/admin` uses these endpoints. The key is held in `sessionStorage`, not persistent browser storage.
 

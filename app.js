@@ -52,8 +52,30 @@
   const packNames = ['Travel Sleeve', 'Daily Ritual', 'Family Reserve'];
   const packSlugs = { 'Travel Sleeve': 'travel-sleeve', 'Daily Ritual': 'daily-ritual', 'Family Reserve': 'family-reserve' };
   const priceByPack = new Map();
+  const availabilityByPack = new Map();
+  let checkoutReady = false;
+  const checkoutWasCancelled = new URL(window.location.href).searchParams.get('checkout') === 'cancelled';
+  const checkoutStatus = qs('[data-checkout-status]');
+  const checkoutSubmit = qs('[data-checkout-submit]');
   const storageKey = 'seven-roots-selected-format';
   let selectedPack = 'Daily Ritual';
+  function syncSelectedAvailability() {
+    if (!checkoutReady || !checkoutSubmit) return;
+    const soldOut = availabilityByPack.get(selectedPack) === 'sold_out';
+    checkoutSubmit.disabled = soldOut;
+    checkoutSubmit.textContent = soldOut ? 'Currently sold out' : 'Continue to secure checkout';
+    if (soldOut && checkoutStatus) {
+      checkoutStatus.textContent = `${selectedPack} is currently sold out. Choose another format.`;
+      checkoutStatus.classList.add('is-error');
+      checkoutStatus.classList.remove('is-success');
+    } else if (checkoutStatus) {
+      checkoutStatus.textContent = checkoutWasCancelled
+        ? 'Checkout was canceled. No payment was made; your selected format is still saved.'
+        : 'Secure checkout is available.';
+      checkoutStatus.classList.toggle('is-error', checkoutWasCancelled);
+      checkoutStatus.classList.remove('is-success');
+    }
+  }
   try {
     const storedPack = window.localStorage.getItem(storageKey);
     if (packNames.includes(storedPack)) selectedPack = storedPack;
@@ -76,6 +98,7 @@
     const radio = qs(`input[name="pack"][value="${name}"]`);
     if (radio) radio.checked = true;
     try { window.localStorage.setItem(storageKey, name); } catch {}
+    syncSelectedAvailability();
   };
 
   qsa('[data-pack]').forEach((card) => {
@@ -158,18 +181,19 @@
     style: 'currency', currency, maximumFractionDigits: unitAmount % 100 ? 2 : 0
   }).format(unitAmount / 100);
 
-  let checkoutReady = false;
-  const checkoutWasCancelled = new URL(window.location.href).searchParams.get('checkout') === 'cancelled';
-  const checkoutStatus = qs('[data-checkout-status]');
-  const checkoutSubmit = qs('[data-checkout-submit]');
   const loadCatalog = async () => {
     try {
       const payload = await getJson('/api/v1/formats');
       let pricedFormats = 0;
       payload.data.forEach((format) => {
-        const display = format.pricing ? formatMoney(format.pricing) : 'Checkout pending';
         const name = packNames.find((packName) => packSlugs[packName] === format.slug);
-        if (name) priceByPack.set(name, display);
+        const price = format.pricing ? formatMoney(format.pricing) : 'Checkout pending';
+        const soldOut = format.availability?.status === 'sold_out';
+        const display = soldOut ? `${price} · Sold out` : price;
+        if (name) {
+          priceByPack.set(name, display);
+          availabilityByPack.set(name, format.availability?.status || 'available');
+        }
         qsa(`[data-price-for="${format.slug}"], [data-dialog-price="${format.slug}"]`).forEach((element) => {
           element.textContent = display;
         });
@@ -246,6 +270,10 @@
     updatePack(String(value));
     if (!checkoutReady) {
       setStatus(checkoutStatus, 'Secure checkout is not available yet. Please try again shortly.', 'error');
+      return;
+    }
+    if (availabilityByPack.get(String(value)) === 'sold_out') {
+      setStatus(checkoutStatus, `${String(value)} is currently sold out. Choose another format.`, 'error');
       return;
     }
     checkoutSubmit.disabled = true;

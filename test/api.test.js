@@ -198,6 +198,7 @@ test("verifies Stripe webhooks and stores an idempotent order", async () => {
           payment_intent: "pi_test_123",
           amount_subtotal: 3600,
           amount_total: 4000,
+          total_details: { amount_shipping: 400, amount_tax: 0 },
           currency: "usd",
           metadata: {
             format_slug: "daily-ritual",
@@ -253,5 +254,218 @@ test("verifies Stripe webhooks and stores an idempotent order", async () => {
     const summaryPayload = await summary.json();
     assert.equal(summaryPayload.data.paidOrderTotal, 1);
     assert.equal(summaryPayload.data.paidRevenue.USD, 4000);
+
+    const payments = await fetch(`${baseUrl}/api/v1/admin/payments`, {
+      headers: { authorization: "Bearer test-admin-key" }
+    });
+    const paymentPayload = await payments.json();
+    assert.equal(payments.status, 200);
+    assert.equal(paymentPayload.data.length, 1);
+    assert.equal(paymentPayload.data[0].orderNumber, confirmationPayload.data.orderNumber);
+    assert.equal(paymentPayload.data[0].stripePaymentIntentId, "pi_test_123");
+    assert.equal(paymentPayload.data[0].status, "paid");
+
+    const report = await fetch(`${baseUrl}/api/v1/admin/financial-report`, {
+      headers: { authorization: "Bearer test-admin-key" }
+    });
+    const reportPayload = await report.json();
+    assert.equal(report.status, 200);
+    assert.equal(reportPayload.data.totals[0].grossSales, 4000);
+    assert.equal(reportPayload.data.totals[0].productSales, 3600);
+    assert.equal(reportPayload.data.totals[0].shippingRevenue, 400);
+    assert.equal(reportPayload.data.totals[0].netCollected, 4000);
+  }, { payments: paymentMock() });
+});
+
+test("reserves tracked inventory and decrements it once after signed payment", async () => {
+  await withServer(async (baseUrl) => {
+    const inventoryUpdate = await fetch(`${baseUrl}/api/v1/admin/inventory/daily-ritual`, {
+      method: "PATCH",
+      headers: { authorization: "Bearer test-admin-key", "content-type": "application/json" },
+      body: JSON.stringify({ stockOnHand: 3, reorderLevel: 1, reason: "Opening physical count" })
+    });
+    assert.equal(inventoryUpdate.status, 200);
+    assert.equal((await inventoryUpdate.json()).data.available, 3);
+
+    const checkout = await fetch(`${baseUrl}/api/v1/checkout/sessions`, {
+      method: "POST",
+      headers: { "content-type": "application/json", "x-request-id": "inventory-checkout-1" },
+      body: JSON.stringify({ formatSlug: "daily-ritual", quantity: 2 })
+    });
+    assert.equal(checkout.status, 201);
+
+    const reserved = await fetch(`${baseUrl}/api/v1/admin/inventory`, {
+      headers: { authorization: "Bearer test-admin-key" }
+    });
+    const reservedItem = (await reserved.json()).data.find((item) => item.formatSlug === "daily-ritual");
+    assert.equal(reservedItem.stockOnHand, 3);
+    assert.equal(reservedItem.reserved, 2);
+    assert.equal(reservedItem.available, 1);
+
+    const oversell = await fetch(`${baseUrl}/api/v1/checkout/sessions`, {
+      method: "POST",
+      headers: { "content-type": "application/json", "x-request-id": "inventory-checkout-2" },
+      body: JSON.stringify({ formatSlug: "daily-ritual", quantity: 2 })
+    });
+    const oversellPayload = await oversell.json();
+    assert.equal(oversell.status, 409);
+    assert.equal(oversellPayload.error.code, "insufficient_inventory");
+    assert.equal(oversellPayload.error.details.available, 1);
+
+    const event = {
+      id: "evt_inventory_paid_1",
+      type: "checkout.session.completed",
+      livemode: false,
+      data: {
+        object: {
+          id: "cs_test_checkout123",
+          created: 1787184000,
+          payment_status: "paid",
+          payment_intent: "pi_inventory_123",
+          amount_subtotal: 3600,
+          amount_total: 4000,
+          total_details: { amount_shipping: 400, amount_tax: 0 },
+          currency: "usd",
+          metadata: { format_slug: "daily-ritual", format_name: "Daily Ritual", sku: "SR-R05", quantity: "2" },
+          customer_details: { name: "Amina Johnson", email: "amina@example.com" }
+        }
+      }
+    };
+    for (let attempt = 0; attempt < 2; attempt += 1) {
+      const webhook = await fetch(`${baseUrl}/api/v1/stripe/webhook`, {
+        method: "POST",
+        headers: { "content-type": "application/json", "stripe-signature": "test-signature" },
+        body: JSON.stringify(event)
+      });
+      assert.equal(webhook.status, 200);
+    }
+
+    const completed = await fetch(`${baseUrl}/api/v1/admin/inventory`, {
+      headers: { authorization: "Bearer test-admin-key" }
+    });
+    const completedItem = (await completed.json()).data.find((item) => item.formatSlug === "daily-ritual");
+    assert.equal(completedItem.stockOnHand, 1);
+    assert.equal(completedItem.reserved, 0);
+    assert.equal(completedItem.available, 1);
+    assert.equal(completedItem.unitsSold, 2);
+    assert.equal(completedItem.status, "low_stock");
+
+    const publicCatalog = await fetch(`${baseUrl}/api/v1/formats/daily-ritual`);
+    const publicPayload = await publicCatalog.json();
+    assert.equal(publicPayload.data.availability.status, "available");
+    assert.equal(publicPayload.data.availability.stockOnHand, undefined);
+  }, { payments: paymentMock() });
+});
+
+test("releases a stock reservation when Stripe expires Checkout", async () => {
+  await withServer(async (baseUrl) => {
+    await fetch(`${baseUrl}/api/v1/admin/inventory/daily-ritual`, {
+      method: "PATCH",
+      headers: { authorization: "Bearer test-admin-key", "content-type": "application/json" },
+      body: JSON.stringify({ stockOnHand: 2, reorderLevel: 1 })
+    });
+    await fetch(`${baseUrl}/api/v1/checkout/sessions`, {
+      method: "POST",
+      headers: { "content-type": "application/json", "x-request-id": "inventory-expiry-1" },
+      body: JSON.stringify({ formatSlug: "daily-ritual", quantity: 2 })
+    });
+
+    const expiredEvent = {
+      id: "evt_inventory_expired_1",
+      type: "checkout.session.expired",
+      livemode: false,
+      data: {
+        object: {
+          id: "cs_test_checkout123",
+          created: 1787184000,
+          payment_status: "unpaid",
+          amount_subtotal: 3600,
+          amount_total: 4000,
+          total_details: { amount_shipping: 400, amount_tax: 0 },
+          currency: "usd",
+          metadata: { format_slug: "daily-ritual", format_name: "Daily Ritual", sku: "SR-R05", quantity: "2" }
+        }
+      }
+    };
+    const webhook = await fetch(`${baseUrl}/api/v1/stripe/webhook`, {
+      method: "POST",
+      headers: { "content-type": "application/json", "stripe-signature": "test-signature" },
+      body: JSON.stringify(expiredEvent)
+    });
+    assert.equal(webhook.status, 200);
+
+    const inventory = await fetch(`${baseUrl}/api/v1/admin/inventory`, {
+      headers: { authorization: "Bearer test-admin-key" }
+    });
+    const item = (await inventory.json()).data.find((record) => record.formatSlug === "daily-ritual");
+    assert.equal(item.stockOnHand, 2);
+    assert.equal(item.reserved, 0);
+    assert.equal(item.available, 2);
+    assert.equal(item.unitsSold, 0);
+  }, { payments: paymentMock() });
+});
+
+test("records Stripe refunds without duplicating the payment ledger", async () => {
+  await withServer(async (baseUrl) => {
+    const sendEvent = (event) => fetch(`${baseUrl}/api/v1/stripe/webhook`, {
+      method: "POST",
+      headers: { "content-type": "application/json", "stripe-signature": "test-signature" },
+      body: JSON.stringify(event)
+    });
+    const completed = {
+      id: "evt_refund_order_paid_1",
+      type: "checkout.session.completed",
+      livemode: false,
+      data: {
+        object: {
+          id: "cs_test_refund123",
+          created: 1787184000,
+          payment_status: "paid",
+          payment_intent: "pi_refund_123",
+          amount_subtotal: 3600,
+          amount_total: 4000,
+          total_details: { amount_shipping: 400, amount_tax: 0 },
+          currency: "usd",
+          metadata: { format_slug: "daily-ritual", format_name: "Daily Ritual", sku: "SR-R05", quantity: "2" },
+          customer_details: { name: "Amina Johnson", email: "amina@example.com" }
+        }
+      }
+    };
+    assert.equal((await sendEvent(completed)).status, 200);
+
+    const partialRefund = {
+      id: "evt_refund_partial_1",
+      type: "charge.refunded",
+      livemode: false,
+      data: {
+        object: {
+          object: "charge",
+          id: "ch_refund_123",
+          payment_intent: "pi_refund_123",
+          amount: 4000,
+          amount_refunded: 1000,
+          refunded: false,
+          currency: "usd"
+        }
+      }
+    };
+    assert.equal((await sendEvent(partialRefund)).status, 200);
+
+    const payments = await fetch(`${baseUrl}/api/v1/admin/payments`, {
+      headers: { authorization: "Bearer test-admin-key" }
+    });
+    const paymentItems = (await payments.json()).data;
+    assert.equal(paymentItems.length, 1);
+    assert.equal(paymentItems[0].status, "partially_refunded");
+    assert.equal(paymentItems[0].amountRefunded, 1000);
+    assert.equal(paymentItems[0].stripeChargeId, "ch_refund_123");
+
+    const report = await fetch(`${baseUrl}/api/v1/admin/financial-report`, {
+      headers: { authorization: "Bearer test-admin-key" }
+    });
+    const totals = (await report.json()).data.totals[0];
+    assert.equal(totals.grossSales, 4000);
+    assert.equal(totals.refunds, 1000);
+    assert.equal(totals.netCollected, 3000);
   }, { payments: paymentMock() });
 });

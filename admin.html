@@ -27,7 +27,7 @@
       <div class="login-mark"><img src="assets/seven-roots-mark.svg" alt="" width="86" height="86"></div>
       <p class="eyebrow">Authorized access</p>
       <h1>Enter the private studio.</h1>
-      <p>Review signed order events, launch interest, and partnership inquiries. The API key remains in this browser tab only and is cleared when you lock the studio.</p>
+      <p>Review signed orders, inventory, payment records, financial reports, launch interest, and partnership inquiries. The API key remains in this browser tab only and is cleared when you lock the studio.</p>
       <form data-login-form>
         <label><span>Admin API key</span><input name="apiKey" type="password" autocomplete="current-password" required></label>
         <button type="submit">Unlock dashboard</button>
@@ -37,15 +37,47 @@
 
     <section class="dashboard" data-dashboard hidden>
       <div class="dashboard-heading">
-        <div><p class="eyebrow">Launch intelligence</p><h1>Customer interest, without the noise.</h1></div>
-        <p>Live private data from the SEVEN ROOTS commerce API, including signed Stripe order events, customer interest, and partner inquiries.</p>
+        <div><p class="eyebrow">Commerce intelligence</p><h1>Orders, stock, and money in one place.</h1></div>
+        <p>Live private data from the SEVEN ROOTS commerce API. Payment records contain Stripe references and amounts, never card numbers or sensitive authentication data.</p>
       </div>
 
       <section class="metrics" aria-label="Launch summary">
         <article><span>01</span><b data-total-orders>—</b><p>Paid orders</p></article>
-        <article><span>02</span><b data-paid-revenue>—</b><p>Net captured sales</p></article>
-        <article><span>03</span><b data-total-waitlist>—</b><p>Launch subscribers</p></article>
-        <article><span>04</span><b data-total-inquiries>—</b><p>Partner inquiries</p></article>
+        <article><span>02</span><b data-paid-revenue>—</b><p>Net collected</p></article>
+        <article><span>03</span><b data-stock-available>—</b><p>Tracked stock available</p></article>
+        <article><span>04</span><b data-total-payments>—</b><p>Payment records</p></article>
+      </section>
+
+      <section class="data-panel financial-panel">
+        <div class="panel-heading"><div><p class="eyebrow">Financial report</p><h2>Sales and refunds</h2></div><button type="button" data-export="payments">Export payments</button></div>
+        <div class="finance-grid" data-finance-summary><p class="empty">Loading financial report…</p></div>
+        <p class="report-note" data-finance-note></p>
+        <div class="report-tables">
+          <div>
+            <h3>Monthly performance</h3>
+            <div class="table-scroll"><table><thead><tr><th>Month</th><th>Paid orders</th><th>Gross</th><th>Refunds</th><th>Net collected</th></tr></thead><tbody data-monthly-body><tr><td colspan="5">Loading report…</td></tr></tbody></table></div>
+          </div>
+          <div>
+            <h3>Product performance</h3>
+            <div class="table-scroll"><table><thead><tr><th>Format</th><th>Orders</th><th>Packs sold</th><th>Product sales</th><th>Net collected</th></tr></thead><tbody data-product-performance-body><tr><td colspan="5">Loading report…</td></tr></tbody></table></div>
+          </div>
+        </div>
+      </section>
+
+      <section class="data-panel inventory-panel">
+        <div class="panel-heading"><div><p class="eyebrow">Inventory control</p><h2>Stock by format</h2></div><small>Saved counts immediately control checkout availability</small></div>
+        <p class="inventory-help">Enter the physical packs on hand and a low-stock threshold. Leave stock blank to keep a format untracked; once tracked, active Checkout Sessions reserve inventory until payment or expiry.</p>
+        <div class="inventory-list" data-inventory-list><p class="empty">Loading inventory…</p></div>
+      </section>
+
+      <section class="data-panel">
+        <div class="panel-heading"><div><p class="eyebrow">Stripe payment records</p><h2>Payment ledger</h2></div><button type="button" data-export="payments">Export CSV</button></div>
+        <div class="table-scroll">
+          <table>
+            <thead><tr><th>Order</th><th>Customer</th><th>PaymentIntent</th><th>Amount</th><th>Refunded</th><th>Net</th><th>Status</th><th>Updated</th></tr></thead>
+            <tbody data-payment-body><tr><td colspan="8">Loading payment records…</td></tr></tbody>
+          </table>
+        </div>
       </section>
 
       <section class="interest-panel">
@@ -57,8 +89,8 @@
         <div class="panel-heading"><div><p class="eyebrow">Stripe orders</p><h2>Order ledger</h2></div><button type="button" data-export="orders">Export CSV</button></div>
         <div class="table-scroll">
           <table>
-            <thead><tr><th>Order</th><th>Customer</th><th>Format</th><th>Quantity</th><th>Total</th><th>Status</th><th>Received</th></tr></thead>
-            <tbody data-order-body><tr><td colspan="7">Loading orders…</td></tr></tbody>
+            <thead><tr><th>Order</th><th>Customer</th><th>Format</th><th>Quantity</th><th>Subtotal</th><th>Shipping</th><th>Total</th><th>Status</th><th>Received</th></tr></thead>
+            <tbody data-order-body><tr><td colspan="9">Loading orders…</td></tr></tbody>
           </table>
         </div>
       </section>

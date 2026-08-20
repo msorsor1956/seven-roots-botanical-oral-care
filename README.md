@@ -21,7 +21,7 @@ The Railway deployment serves the frontend and API from one Node process. The Gi
 - Reduced-motion and static-image fallbacks
 - Accessible pre-launch signup connected to the API
 - Server-priced purchase dialog with Stripe-hosted Checkout
-- Branded order-confirmation page with signed-status polling
+- Branded order-confirmation page with signed-status polling, customer order number, and shipping breakdown
 - Trade, sourcing, retail, and press inquiry form
 
 ### Backend
@@ -34,8 +34,10 @@ The Railway deployment serves the frontend and API from one Node process. The Gi
 - Origin allowlist, body-size limits, security headers, and request IDs
 - Atomic private JSON storage with restrictive file permissions
 - API-key protected admin endpoints
-- Private `/admin` dashboard with summaries, interest breakdowns, lead review, and CSV export
-- Signed Stripe webhook processing, idempotent order storage, refunds, and private order exports
+- Private `/admin` commerce dashboard with orders, inventory controls, financial reports, payment records, leads, and CSV export
+- Signed Stripe webhook processing with idempotent order numbers and a separate payment ledger
+- Optional per-format stock tracking with Checkout reservations, expiry release, low-stock states, and adjustment history
+- Gross sales, product sales, shipping, refunds, net collected, monthly performance, and product performance reports
 - Automated API and static-serving tests
 
 ## Run locally
@@ -104,6 +106,16 @@ Then:
 2. Confirm the public Railway domain under **Settings → Networking**.
 3. Add that exact `https://...` origin to `ALLOWED_ORIGINS`.
 4. Open `/api/v1/health`, submit a test signup, and confirm it in `/admin`.
+
+### Turn on inventory enforcement
+
+Inventory starts in **not tracked** mode after the automatic data migration, so a deployment never invents a physical stock count or unexpectedly disables a live product. In `/admin`:
+
+1. Enter the actual number of sellable packs on hand for each format.
+2. Set the low-stock threshold.
+3. Save the count with an adjustment note.
+
+Once a format has a stock count, new Checkout Sessions reserve the requested packs. A signed successful-payment event converts the reservation into sold stock; an expired or failed Checkout releases it. Refunds are recorded financially but do not automatically restock a physical item because a refund does not prove that sellable goods were returned. Update the physical count after inspecting a return.
 
 Railway configuration follows the official [Config as Code](https://docs.railway.com/config-as-code/reference), [healthcheck](https://docs.railway.com/deployments/healthchecks), and [public networking](https://docs.railway.com/networking/public-networking) guidance.
 

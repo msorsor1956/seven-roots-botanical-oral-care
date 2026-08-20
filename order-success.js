@@ -21,6 +21,8 @@
     qs('[data-order-number]').textContent = order.orderNumber;
     qs('[data-format]').textContent = `${order.formatName || 'SEVEN ROOTS format'}${order.sku ? ` · ${order.sku}` : ''}`;
     qs('[data-quantity]').textContent = `${order.quantity} ${order.quantity === 1 ? 'pack' : 'packs'}`;
+    qs('[data-subtotal]').textContent = money(order.amountSubtotal, order.currency);
+    qs('[data-shipping]').textContent = money(order.amountShipping, order.currency);
     qs('[data-total]').textContent = money(order.amountTotal, order.currency);
     qs('[data-order-status]').textContent = order.status.replaceAll('_', ' ');
     details.hidden = false;

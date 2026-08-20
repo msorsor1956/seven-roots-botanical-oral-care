@@ -6,7 +6,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { formats, formatBySlug } from "./catalog.js";
 import { createPayments, PaymentConfigurationError } from "./payments.js";
-import { JsonStore } from "./store.js";
+import { InventoryError, JsonStore } from "./store.js";
 import { validateInquiry, validateWaitlist } from "./validation.js";
 
 const serverDir = path.dirname(fileURLToPath(import.meta.url));
@@ -161,7 +161,8 @@ export async function createApplication(options = {}) {
   const checkoutLimiter = createRateLimiter({ windowMs: 15 * 60 * 1000, max: 8 });
 
   const server = http.createServer(async (request, response) => {
-    const requestId = request.headers["x-request-id"] || randomUUID();
+    const suppliedRequestId = typeof request.headers["x-request-id"] === "string" ? request.headers["x-request-id"].trim() : "";
+    const requestId = /^[A-Za-z0-9_.:-]{1,120}$/u.test(suppliedRequestId) ? suppliedRequestId : randomUUID();
     const origin = String(request.headers.origin || "");
     const hostOrigin = request.headers.host ? `${request.headers["x-forwarded-proto"] || "http"}://${request.headers.host}` : "";
     const originAllowed = !origin || origin === hostOrigin || configuredOrigins.includes(origin);
@@ -184,7 +185,7 @@ export async function createApplication(options = {}) {
       if (request.method === "OPTIONS" && pathname.startsWith("/api/")) {
         if (!originAllowed) throw new HttpError(403, "origin_not_allowed", "This browser origin is not allowed.");
         response.writeHead(204, {
-          "Access-Control-Allow-Methods": "GET, POST, OPTIONS",
+          "Access-Control-Allow-Methods": "GET, POST, PATCH, OPTIONS",
           "Access-Control-Allow-Headers": "Content-Type, Authorization, X-Request-Id",
           "Access-Control-Max-Age": "86400"
         });
@@ -200,7 +201,7 @@ export async function createApplication(options = {}) {
         sendJson(response, 200, {
           status: "ok",
           service: "seven-roots-api",
-          version: "1.2.0",
+          version: "1.3.0",
           storage: "file",
           payments: payments.configured ? "ready" : "configuration_required"
         });
@@ -209,9 +210,13 @@ export async function createApplication(options = {}) {
 
       if (request.method === "GET" && pathname === "/api/v1/formats") {
         const publicFormats = await payments.publicFormats(formats);
+        const availableFormats = publicFormats.map((format) => ({
+          ...format,
+          availability: store.publicAvailability(format.slug)
+        }));
         sendJson(response, 200, {
-          data: publicFormats,
-          meta: { count: publicFormats.length, pricingStatus: payments.configured ? "available" : "configuration_required" }
+          data: availableFormats,
+          meta: { count: availableFormats.length, pricingStatus: payments.configured ? "available" : "configuration_required" }
         });
         return;
       }
@@ -221,7 +226,7 @@ export async function createApplication(options = {}) {
         const format = formatBySlug.get(slug);
         if (!format) throw new HttpError(404, "format_not_found", "Product format not found.");
         const [publicFormat] = await payments.publicFormats([format]);
-        sendJson(response, 200, { data: publicFormat });
+        sendJson(response, 200, { data: { ...publicFormat, availability: store.publicAvailability(format.slug) } });
         return;
       }
 
@@ -235,15 +240,20 @@ export async function createApplication(options = {}) {
         if (!formatBySlug.has(formatSlug)) details.formatSlug = "Choose an available product format.";
         if (!Number.isInteger(quantity) || quantity < 1 || quantity > 10) details.quantity = "Quantity must be a whole number from 1 to 10.";
         if (Object.keys(details).length) throw new HttpError(422, "validation_failed", "Check the checkout details.", details);
+        const format = formatBySlug.get(formatSlug);
+        await store.reserveInventory(format, quantity, requestId);
+        let session;
         try {
-          const session = await payments.createCheckout({ format: formatBySlug.get(formatSlug), quantity, requestId });
-          sendJson(response, 201, { data: session, message: "Secure checkout is ready." });
+          session = await payments.createCheckout({ format, quantity, requestId });
         } catch (error) {
+          await store.releaseInventoryReservation(requestId, "checkout_failed");
           if (error instanceof PaymentConfigurationError || error?.code === "checkout_not_configured") {
             throw new HttpError(503, "checkout_not_configured", error.message);
           }
           throw error;
         }
+        await store.attachInventoryReservation(requestId, session.id);
+        sendJson(response, 201, { data: session, message: "Secure checkout is ready." });
         return;
       }
 
@@ -325,6 +335,45 @@ export async function createApplication(options = {}) {
           sendJson(response, 200, { data: store.list("orders", url.searchParams.get("limit")) });
           return;
         }
+        if (request.method === "GET" && pathname === "/api/v1/admin/payments") {
+          sendJson(response, 200, { data: store.list("payments", url.searchParams.get("limit")) });
+          return;
+        }
+        if (request.method === "GET" && pathname === "/api/v1/admin/inventory") {
+          sendJson(response, 200, { data: store.inventoryReport() });
+          return;
+        }
+        if (request.method === "GET" && pathname === "/api/v1/admin/financial-report") {
+          sendJson(response, 200, { data: store.financialReport() });
+          return;
+        }
+        if (request.method === "GET" && pathname === "/api/v1/admin/inventory-adjustments") {
+          sendJson(response, 200, { data: store.list("inventoryAdjustments", url.searchParams.get("limit")) });
+          return;
+        }
+        if (request.method === "PATCH" && pathname.startsWith("/api/v1/admin/inventory/")) {
+          const formatSlug = pathname.slice("/api/v1/admin/inventory/".length);
+          if (!formatBySlug.has(formatSlug)) throw new HttpError(404, "format_not_found", "Product format not found.");
+          const input = await readJson(request);
+          const update = {};
+          const details = {};
+          if (Object.hasOwn(input, "stockOnHand")) {
+            if (input.stockOnHand !== null && (!Number.isInteger(input.stockOnHand) || input.stockOnHand < 0 || input.stockOnHand > 1_000_000)) {
+              details.stockOnHand = "Stock on hand must be a whole number from 0 to 1,000,000, or null to stop tracking.";
+            } else update.stockOnHand = input.stockOnHand;
+          }
+          if (Object.hasOwn(input, "reorderLevel")) {
+            if (!Number.isInteger(input.reorderLevel) || input.reorderLevel < 0 || input.reorderLevel > 100_000) {
+              details.reorderLevel = "Reorder level must be a whole number from 0 to 100,000.";
+            } else update.reorderLevel = input.reorderLevel;
+          }
+          if (!Object.keys(update).length && !Object.keys(details).length) details.inventory = "Provide stockOnHand or reorderLevel.";
+          if (typeof input.reason === "string") update.reason = input.reason.trim().slice(0, 180);
+          if (Object.keys(details).length) throw new HttpError(422, "validation_failed", "Check the inventory update.", details);
+          const inventory = await store.updateInventory(formatSlug, update);
+          sendJson(response, 200, { data: inventory, message: `${inventory.formatName} inventory was updated.` });
+          return;
+        }
       }
 
       if (pathname.startsWith("/api/")) throw new HttpError(404, "route_not_found", "API route not found.");
@@ -336,14 +385,15 @@ export async function createApplication(options = {}) {
       }
       throw new HttpError(405, "method_not_allowed", "Method not allowed.");
     } catch (error) {
-      const status = error instanceof HttpError ? error.status : 500;
+      const inventoryError = error instanceof InventoryError;
+      const status = error instanceof HttpError ? error.status : inventoryError ? 409 : 500;
       if (status === 500) console.error(`[${requestId}]`, error);
       if (error?.details?.retryAfter) response.setHeader("Retry-After", String(error.details.retryAfter));
       sendJson(response, status, {
         error: {
-          code: error instanceof HttpError ? error.code : "internal_error",
-          message: error instanceof HttpError ? error.message : "The server could not complete this request.",
-          ...(error instanceof HttpError && error.details ? { details: error.details } : {}),
+          code: error instanceof HttpError || inventoryError ? error.code : "internal_error",
+          message: error instanceof HttpError || inventoryError ? error.message : "The server could not complete this request.",
+          ...((error instanceof HttpError || inventoryError) && error.details ? { details: error.details } : {}),
           requestId
         }
       });
