@@ -28,7 +28,7 @@ jobs:
       - name: Prepare public site artifact
         run: |
           mkdir -p _site/assets
-          cp index.html 404.html styles.css app.js product-360.js robots.txt sitemap.xml .nojekyll _site/
+          cp index.html 404.html styles.css app.js product-360.js order-success.html order-success.css order-success.js robots.txt sitemap.xml .nojekyll _site/
           cp -R assets/. _site/assets/
       - name: Upload static site
         uses: actions/upload-pages-artifact@v3

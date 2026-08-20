@@ -5,6 +5,7 @@ import http from "node:http";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { formats, formatBySlug } from "./catalog.js";
+import { createPayments, PaymentConfigurationError } from "./payments.js";
 import { JsonStore } from "./store.js";
 import { validateInquiry, validateWaitlist } from "./validation.js";
 
@@ -87,6 +88,17 @@ const readJson = async (request) => {
   }
 };
 
+const readRaw = async (request, maxBytes = 512 * 1024) => {
+  const chunks = [];
+  let size = 0;
+  for await (const chunk of request) {
+    size += chunk.length;
+    if (size > maxBytes) throw new HttpError(413, "payload_too_large", "Request body is too large.");
+    chunks.push(chunk);
+  }
+  return Buffer.concat(chunks);
+};
+
 const safeStaticPath = (rootDir, pathname) => {
   const exact = new Map([
     ["/", "index.html"],
@@ -99,6 +111,10 @@ const safeStaticPath = (rootDir, pathname) => {
     ["/admin.html", "admin.html"],
     ["/admin.css", "admin.css"],
     ["/admin.js", "admin.js"],
+    ["/order-success", "order-success.html"],
+    ["/order-success.html", "order-success.html"],
+    ["/order-success.css", "order-success.css"],
+    ["/order-success.js", "order-success.js"],
     ["/robots.txt", "robots.txt"],
     ["/sitemap.xml", "sitemap.xml"],
     ["/favicon.ico", "assets/seven-roots-mark.svg"]
@@ -140,7 +156,9 @@ export async function createApplication(options = {}) {
   const configuredOrigins = String(options.allowedOrigins ?? process.env.ALLOWED_ORIGINS ?? "")
     .split(",").map((origin) => origin.trim()).filter(Boolean);
   const store = options.store || await new JsonStore(dataDir).init();
+  const payments = options.payments || createPayments(options.paymentOptions);
   const writeLimiter = createRateLimiter({ windowMs: 15 * 60 * 1000, max: 20 });
+  const checkoutLimiter = createRateLimiter({ windowMs: 15 * 60 * 1000, max: 8 });
 
   const server = http.createServer(async (request, response) => {
     const requestId = request.headers["x-request-id"] || randomUUID();
@@ -179,12 +197,22 @@ export async function createApplication(options = {}) {
       }
 
       if (request.method === "GET" && pathname === "/api/v1/health") {
-        sendJson(response, 200, { status: "ok", service: "seven-roots-api", version: "1.1.0", storage: "file" });
+        sendJson(response, 200, {
+          status: "ok",
+          service: "seven-roots-api",
+          version: "1.2.0",
+          storage: "file",
+          payments: payments.configured ? "ready" : "configuration_required"
+        });
         return;
       }
 
       if (request.method === "GET" && pathname === "/api/v1/formats") {
-        sendJson(response, 200, { data: formats, meta: { count: formats.length, pricingStatus: "pending" } });
+        const publicFormats = await payments.publicFormats(formats);
+        sendJson(response, 200, {
+          data: publicFormats,
+          meta: { count: publicFormats.length, pricingStatus: payments.configured ? "available" : "configuration_required" }
+        });
         return;
       }
 
@@ -192,7 +220,55 @@ export async function createApplication(options = {}) {
         const slug = pathname.slice("/api/v1/formats/".length);
         const format = formatBySlug.get(slug);
         if (!format) throw new HttpError(404, "format_not_found", "Product format not found.");
-        sendJson(response, 200, { data: format });
+        const [publicFormat] = await payments.publicFormats([format]);
+        sendJson(response, 200, { data: publicFormat });
+        return;
+      }
+
+      if (request.method === "POST" && pathname === "/api/v1/checkout/sessions") {
+        const rate = checkoutLimiter(request);
+        if (!rate.allowed) throw new HttpError(429, "rate_limited", "Too many checkout attempts. Please try again later.", { retryAfter: rate.retryAfter });
+        const input = await readJson(request);
+        const formatSlug = String(input.formatSlug || "").trim();
+        const quantity = Number(input.quantity ?? 1);
+        const details = {};
+        if (!formatBySlug.has(formatSlug)) details.formatSlug = "Choose an available product format.";
+        if (!Number.isInteger(quantity) || quantity < 1 || quantity > 10) details.quantity = "Quantity must be a whole number from 1 to 10.";
+        if (Object.keys(details).length) throw new HttpError(422, "validation_failed", "Check the checkout details.", details);
+        try {
+          const session = await payments.createCheckout({ format: formatBySlug.get(formatSlug), quantity, requestId });
+          sendJson(response, 201, { data: session, message: "Secure checkout is ready." });
+        } catch (error) {
+          if (error instanceof PaymentConfigurationError || error?.code === "checkout_not_configured") {
+            throw new HttpError(503, "checkout_not_configured", error.message);
+          }
+          throw error;
+        }
+        return;
+      }
+
+      if (request.method === "GET" && pathname === "/api/v1/orders/lookup") {
+        const sessionId = String(url.searchParams.get("session_id") || "");
+        if (!/^cs_[A-Za-z0-9_]+$/u.test(sessionId)) throw new HttpError(422, "invalid_session", "A valid Checkout Session is required.");
+        const order = store.publicOrder(sessionId);
+        if (!order) throw new HttpError(404, "order_pending", "Your payment is still being confirmed. Please try again shortly.");
+        sendJson(response, 200, { data: order });
+        return;
+      }
+
+      if (request.method === "POST" && pathname === "/api/v1/stripe/webhook") {
+        const rawBody = await readRaw(request);
+        let event;
+        try {
+          event = await payments.constructWebhookEvent(rawBody, String(request.headers["stripe-signature"] || ""));
+        } catch (error) {
+          if (error instanceof PaymentConfigurationError || error?.code === "checkout_not_configured") {
+            throw new HttpError(503, "stripe_webhook_not_configured", "Stripe webhooks are not configured.");
+          }
+          throw new HttpError(400, "invalid_stripe_signature", "The Stripe webhook signature could not be verified.");
+        }
+        const result = await store.applyStripeEvent(event);
+        sendJson(response, 200, { received: true, duplicate: result.duplicate });
         return;
       }
 
@@ -245,6 +321,10 @@ export async function createApplication(options = {}) {
           sendJson(response, 200, { data: store.list("inquiries", url.searchParams.get("limit")) });
           return;
         }
+        if (request.method === "GET" && pathname === "/api/v1/admin/orders") {
+          sendJson(response, 200, { data: store.list("orders", url.searchParams.get("limit")) });
+          return;
+        }
       }
 
       if (pathname.startsWith("/api/")) throw new HttpError(404, "route_not_found", "API route not found.");
@@ -270,5 +350,5 @@ export async function createApplication(options = {}) {
     }
   });
 
-  return { server, store };
+  return { server, store, payments };
 }

@@ -1,6 +1,6 @@
 # SEVEN ROOTS | African Botanical Oral Care
 
-Production-ready storefront and backend for the **SEVEN ROOTS** pre-launch collection.
+Production-ready storefront, Stripe payment flow, and backend for the **SEVEN ROOTS** collection.
 
 ## Live frontend
 
@@ -20,6 +20,8 @@ The Railway deployment serves the frontend and API from one Node process. The Gi
 - Drag, swipe, keyboard, zoom, reset, and auto-rotation controls
 - Reduced-motion and static-image fallbacks
 - Accessible pre-launch signup connected to the API
+- Server-priced purchase dialog with Stripe-hosted Checkout
+- Branded order-confirmation page with signed-status polling
 - Trade, sourcing, retail, and press inquiry form
 
 ### Backend
@@ -33,14 +35,16 @@ The Railway deployment serves the frontend and API from one Node process. The Gi
 - Atomic private JSON storage with restrictive file permissions
 - API-key protected admin endpoints
 - Private `/admin` dashboard with summaries, interest breakdowns, lead review, and CSV export
+- Signed Stripe webhook processing, idempotent order storage, refunds, and private order exports
 - Automated API and static-serving tests
 
 ## Run locally
 
-Node.js 20 or newer is required. There are no third-party runtime dependencies.
+Node.js 20 or newer is required. The official Stripe Node SDK is the only third-party runtime dependency.
 
 ```bash
 cp .env.example .env
+npm install
 npm start
 ```
 
@@ -70,9 +74,29 @@ NODE_ENV=production
 DATA_DIR=/data
 ADMIN_API_KEY=<a long random secret>
 ALLOWED_ORIGINS=https://msorsor1956.github.io,https://seven-roots-botanical-oral-care-production.up.railway.app
+PUBLIC_BASE_URL=https://seven-roots-botanical-oral-care-production.up.railway.app
+STRIPE_API_KEY=<restricted Stripe API key>
+STRIPE_WEBHOOK_SECRET=<Stripe endpoint signing secret>
+STRIPE_PRICE_TRAVEL_SLEEVE=<active one-time Price ID>
+STRIPE_PRICE_DAILY_RITUAL=<active one-time Price ID>
+STRIPE_PRICE_FAMILY_RESERVE=<active one-time Price ID>
+STRIPE_SHIPPING_COUNTRIES=US
+STRIPE_SHIPPING_RATE_IDS=<optional comma-separated Shipping Rate IDs>
 ```
 
 Add a Railway volume mounted at `/data`. Without a volume, submissions work but the service filesystem may be replaced during a deployment. Do not commit the generated `.data` directory or an admin key.
+
+Use a dedicated restricted Stripe key with least-privilege access. Keep every key and webhook secret in Railway Variables; never place them in GitHub, HTML, client JavaScript, screenshots, or support messages. Run `npm run security` before publishing.
+
+Create the production webhook endpoint at:
+
+```text
+https://seven-roots-botanical-oral-care-production.up.railway.app/api/v1/stripe/webhook
+```
+
+Subscribe it to `checkout.session.completed`, `checkout.session.async_payment_succeeded`, `checkout.session.async_payment_failed`, `checkout.session.expired`, `charge.refunded`, and `payment_intent.payment_failed`, then store its `whsec_...` signing secret as `STRIPE_WEBHOOK_SECRET`.
+
+Stripe Tax is not enabled by this application because no active tax registration has been confirmed. Configure registrations before enabling automatic tax collection.
 
 Then:
 
@@ -97,9 +121,9 @@ See [docs/API.md](docs/API.md) for endpoint details and examples.
 
 The Pages workflow publishes only the public storefront files. Backend source, the private admin interface, and data are excluded from the Pages artifact. Forms require the Railway-hosted version unless an API base URL is explicitly configured in the storefront metadata.
 
-## Pre-launch notice
+## Commerce notice
 
-Products shown are in pre-launch development. Final sourcing, safety testing, regulatory review, trademarks, specifications, pricing, availability, and claims must be completed before sale.
+Checkout stays disabled until every required Stripe variable, approved one-time Price ID, delivery destination, and signed webhook secret is configured. Product compliance, fulfillment, shipping, returns, and applicable tax obligations remain the merchant’s responsibility.
 
 ## Rights
 

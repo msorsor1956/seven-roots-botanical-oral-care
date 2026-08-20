@@ -1,0 +1,56 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="theme-color" content="#173D32">
+  <meta name="robots" content="noindex, nofollow">
+  <meta name="seven-roots-api-base" content="https://seven-roots-botanical-oral-care-production.up.railway.app">
+  <title>Order confirmation | SEVEN ROOTS</title>
+  <link rel="icon" href="assets/seven-roots-mark.svg" type="image/svg+xml">
+  <link rel="stylesheet" href="order-success.css">
+</head>
+<body>
+  <header>
+    <a class="brand" href="./" aria-label="Seven Roots home">
+      <img src="assets/seven-roots-mark.svg" alt="" width="46" height="46">
+      <span><b>SEVEN ROOTS</b><small>BOTANICAL ORAL CARE</small></span>
+    </a>
+    <span class="secure-note">Secure order confirmation</span>
+  </header>
+
+  <main>
+    <section class="confirmation" aria-labelledby="confirmation-title">
+      <div class="status-mark" data-status-mark aria-hidden="true"><i></i></div>
+      <p class="eyebrow">Payment confirmation</p>
+      <h1 id="confirmation-title" data-title>Confirming your ritual.</h1>
+      <p class="lede" data-message role="status" aria-live="polite">Stripe has returned you safely. We’re waiting for the signed payment confirmation.</p>
+
+      <dl class="order-details" data-order-details hidden>
+        <div><dt>Order</dt><dd data-order-number>—</dd></div>
+        <div><dt>Format</dt><dd data-format>—</dd></div>
+        <div><dt>Quantity</dt><dd data-quantity>—</dd></div>
+        <div><dt>Total</dt><dd data-total>—</dd></div>
+        <div><dt>Status</dt><dd><span class="status-pill" data-order-status>—</span></dd></div>
+      </dl>
+
+      <div class="actions">
+        <a class="primary" href="./">Return to the collection</a>
+        <a class="secondary" href="./#partner">Contact SEVEN ROOTS</a>
+      </div>
+      <p class="privacy-note">This page uses the high-entropy Checkout Session reference in your return link and never displays your address or payment details.</p>
+    </section>
+
+    <aside aria-label="What happens next">
+      <p class="eyebrow light">What happens next</p>
+      <h2>Your order moves from ritual to readiness.</h2>
+      <ol>
+        <li><span>01</span><p><b>Payment verified</b> A signed Stripe webhook confirms the final status.</p></li>
+        <li><span>02</span><p><b>Order reviewed</b> The SEVEN ROOTS team sees the order in its private studio.</p></li>
+        <li><span>03</span><p><b>Fulfillment update</b> Order and delivery communication goes to the email entered in Checkout.</p></li>
+      </ol>
+    </aside>
+  </main>
+  <script src="order-success.js?v=1.2.0" defer></script>
+</body>
+</html>

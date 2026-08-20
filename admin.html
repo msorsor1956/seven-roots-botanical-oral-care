@@ -27,7 +27,7 @@
       <div class="login-mark"><img src="assets/seven-roots-mark.svg" alt="" width="86" height="86"></div>
       <p class="eyebrow">Authorized access</p>
       <h1>Enter the private studio.</h1>
-      <p>Review pre-launch interest and partnership inquiries. The API key remains in this browser tab only and is cleared when you lock the studio.</p>
+      <p>Review signed order events, launch interest, and partnership inquiries. The API key remains in this browser tab only and is cleared when you lock the studio.</p>
       <form data-login-form>
         <label><span>Admin API key</span><input name="apiKey" type="password" autocomplete="current-password" required></label>
         <button type="submit">Unlock dashboard</button>
@@ -38,18 +38,29 @@
     <section class="dashboard" data-dashboard hidden>
       <div class="dashboard-heading">
         <div><p class="eyebrow">Launch intelligence</p><h1>Customer interest, without the noise.</h1></div>
-        <p>Live private data from the SEVEN ROOTS pre-launch API. No payment or order information is collected.</p>
+        <p>Live private data from the SEVEN ROOTS commerce API, including signed Stripe order events, customer interest, and partner inquiries.</p>
       </div>
 
       <section class="metrics" aria-label="Launch summary">
-        <article><span>01</span><b data-total-waitlist>—</b><p>Pre-launch subscribers</p></article>
-        <article><span>02</span><b data-total-inquiries>—</b><p>Partner inquiries</p></article>
-        <article><span>03</span><b data-leading-format>—</b><p>Leading pack format</p></article>
+        <article><span>01</span><b data-total-orders>—</b><p>Paid orders</p></article>
+        <article><span>02</span><b data-paid-revenue>—</b><p>Net captured sales</p></article>
+        <article><span>03</span><b data-total-waitlist>—</b><p>Launch subscribers</p></article>
+        <article><span>04</span><b data-total-inquiries>—</b><p>Partner inquiries</p></article>
       </section>
 
       <section class="interest-panel">
         <div class="panel-heading"><div><p class="eyebrow">Format signal</p><h2>What customers prefer</h2></div><small>Unique emails</small></div>
         <div class="interest-bars" data-interest-bars></div>
+      </section>
+
+      <section class="data-panel">
+        <div class="panel-heading"><div><p class="eyebrow">Stripe orders</p><h2>Order ledger</h2></div><button type="button" data-export="orders">Export CSV</button></div>
+        <div class="table-scroll">
+          <table>
+            <thead><tr><th>Order</th><th>Customer</th><th>Format</th><th>Quantity</th><th>Total</th><th>Status</th><th>Received</th></tr></thead>
+            <tbody data-order-body><tr><td colspan="7">Loading orders…</td></tr></tbody>
+          </table>
+        </div>
       </section>
 
       <section class="data-panel">

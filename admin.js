@@ -9,7 +9,7 @@
   const dashboardStatus = qs('[data-dashboard-status]');
   const formatNames = { 'travel-sleeve': 'Travel Sleeve', 'daily-ritual': 'Daily Ritual', 'family-reserve': 'Family Reserve' };
   let apiKey = sessionStorage.getItem('seven-roots-admin-key') || '';
-  let collections = { waitlist: [], inquiries: [] };
+  let collections = { orders: [], waitlist: [], inquiries: [] };
 
   const setStatus = (element, message, isError = false) => {
     element.textContent = message;
@@ -24,12 +24,19 @@
   };
 
   const formatDate = (value) => new Intl.DateTimeFormat(undefined, { dateStyle: 'medium', timeStyle: 'short' }).format(new Date(value));
+  const formatMoney = (amount, currency) => Number.isInteger(amount) && currency
+    ? new Intl.NumberFormat(undefined, { style: 'currency', currency }).format(amount / 100)
+    : '—';
 
   const renderSummary = (summary) => {
+    qs('[data-total-orders]').textContent = summary.paidOrderTotal;
+    const revenue = Object.entries(summary.paidRevenue || {});
+    qs('[data-paid-revenue]').textContent = revenue.length
+      ? revenue.map(([currency, amount]) => formatMoney(amount, currency)).join(' · ')
+      : '—';
     qs('[data-total-waitlist]').textContent = summary.waitlistTotal;
     qs('[data-total-inquiries]').textContent = summary.inquiryTotal;
     const entries = Object.entries(summary.formatInterest || {}).sort((a, b) => b[1] - a[1]);
-    qs('[data-leading-format]').textContent = entries.length ? formatNames[entries[0][0]] || entries[0][0] : 'No signal yet';
     const maximum = Math.max(1, ...entries.map(([, count]) => count));
     const bars = qs('[data-interest-bars]');
     bars.replaceChildren();
@@ -49,6 +56,39 @@
       value.textContent = count;
       row.append(label, track, value);
       bars.append(row);
+    });
+  };
+
+  const renderOrders = (items) => {
+    const body = qs('[data-order-body]');
+    body.replaceChildren();
+    if (!items.length) {
+      const row = body.insertRow();
+      const cell = row.insertCell();
+      cell.colSpan = 7;
+      cell.textContent = 'No signed Stripe orders have arrived yet.';
+      return;
+    }
+    items.forEach((item) => {
+      const row = body.insertRow();
+      const values = [
+        item.orderNumber,
+        [item.customer?.name, item.customer?.email].filter(Boolean).join(' · ') || '—',
+        item.formatName || formatNames[item.formatSlug] || item.sku || '—',
+        item.quantity,
+        formatMoney(item.amountTotal, item.currency),
+        item.status?.replaceAll('_', ' ') || 'unknown',
+        formatDate(item.createdAt)
+      ];
+      values.forEach((value, index) => {
+        const cell = row.insertCell();
+        if (index === 5) {
+          const status = document.createElement('span');
+          status.className = `order-status${['paid', 'pending'].includes(item.status) ? '' : ' is-alert'}`;
+          status.textContent = value;
+          cell.append(status);
+        } else cell.textContent = value;
+      });
     });
   };
 
@@ -106,11 +146,12 @@
 
   const loadDashboard = async () => {
     setStatus(dashboardStatus, 'Refreshing private data…');
-    const [summary, waitlist, inquiries] = await Promise.all([
-      api('/api/v1/admin/summary'), api('/api/v1/admin/waitlist?limit=500'), api('/api/v1/admin/inquiries?limit=500')
+    const [summary, orders, waitlist, inquiries] = await Promise.all([
+      api('/api/v1/admin/summary'), api('/api/v1/admin/orders?limit=500'), api('/api/v1/admin/waitlist?limit=500'), api('/api/v1/admin/inquiries?limit=500')
     ]);
-    collections = { waitlist, inquiries };
+    collections = { orders, waitlist, inquiries };
     renderSummary(summary);
+    renderOrders(orders);
     renderWaitlist(waitlist);
     renderInquiries(inquiries);
     setStatus(dashboardStatus, `Updated ${new Date().toLocaleTimeString()}.`);
@@ -155,10 +196,15 @@
     const type = button.dataset.export;
     const rows = collections[type];
     if (!rows.length) return;
-    const keys = type === 'waitlist'
-      ? ['name', 'email', 'preferredFormat', 'country', 'status', 'createdAt']
-      : ['name', 'email', 'phone', 'organization', 'inquiryType', 'message', 'status', 'createdAt'];
-    const csv = [keys.join(','), ...rows.map((row) => keys.map((key) => csvCell(row[key])).join(','))].join('\n');
+    const keys = type === 'orders'
+      ? ['orderNumber', 'customerName', 'customerEmail', 'formatName', 'sku', 'quantity', 'amountTotal', 'currency', 'status', 'stripeSessionId', 'stripePaymentIntentId', 'createdAt']
+      : type === 'waitlist'
+        ? ['name', 'email', 'preferredFormat', 'country', 'status', 'createdAt']
+        : ['name', 'email', 'phone', 'organization', 'inquiryType', 'message', 'status', 'createdAt'];
+    const exportRows = type === 'orders'
+      ? rows.map((row) => ({ ...row, customerName: row.customer?.name, customerEmail: row.customer?.email }))
+      : rows;
+    const csv = [keys.join(','), ...exportRows.map((row) => keys.map((key) => csvCell(row[key])).join(','))].join('\n');
     const link = document.createElement('a');
     link.href = URL.createObjectURL(new Blob([csv], { type: 'text/csv;charset=utf-8' }));
     link.download = `seven-roots-${type}-${new Date().toISOString().slice(0, 10)}.csv`;

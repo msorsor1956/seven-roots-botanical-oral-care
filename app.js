@@ -50,6 +50,8 @@
   }
 
   const packNames = ['Travel Sleeve', 'Daily Ritual', 'Family Reserve'];
+  const packSlugs = { 'Travel Sleeve': 'travel-sleeve', 'Daily Ritual': 'daily-ritual', 'Family Reserve': 'family-reserve' };
+  const priceByPack = new Map();
   const storageKey = 'seven-roots-selected-format';
   let selectedPack = 'Daily Ritual';
   try {
@@ -67,8 +69,10 @@
     });
     const status = qs('[data-selected-pack]');
     const mobile = qs('[data-mobile-pack]');
+    const mobilePrice = qs('[data-mobile-price]');
     if (status) status.textContent = name;
     if (mobile) mobile.textContent = name;
+    if (mobilePrice) mobilePrice.textContent = priceByPack.get(name) || 'Checking price…';
     const radio = qs(`input[name="pack"][value="${name}"]`);
     if (radio) radio.checked = true;
     try { window.localStorage.setItem(storageKey, name); } catch {}
@@ -129,6 +133,12 @@
   }));
 
   const apiBase = qs('meta[name="seven-roots-api-base"]')?.content.replace(/\/$/u, '') || '';
+  const getJson = async (path) => {
+    const response = await fetch(`${apiBase}${path}`, { headers: { accept: 'application/json' } });
+    const payload = await response.json().catch(() => ({}));
+    if (!response.ok) throw new Error(payload.error?.message || 'The request could not be completed.');
+    return payload;
+  };
   const postJson = async (path, body) => {
     const response = await fetch(`${apiBase}${path}`, {
       method: 'POST',
@@ -142,6 +152,44 @@
       throw error;
     }
     return payload;
+  };
+
+  const formatMoney = ({ unitAmount, currency }) => new Intl.NumberFormat(undefined, {
+    style: 'currency', currency, maximumFractionDigits: unitAmount % 100 ? 2 : 0
+  }).format(unitAmount / 100);
+
+  let checkoutReady = false;
+  const checkoutWasCancelled = new URL(window.location.href).searchParams.get('checkout') === 'cancelled';
+  const checkoutStatus = qs('[data-checkout-status]');
+  const checkoutSubmit = qs('[data-checkout-submit]');
+  const loadCatalog = async () => {
+    try {
+      const payload = await getJson('/api/v1/formats');
+      let pricedFormats = 0;
+      payload.data.forEach((format) => {
+        const display = format.pricing ? formatMoney(format.pricing) : 'Checkout pending';
+        const name = packNames.find((packName) => packSlugs[packName] === format.slug);
+        if (name) priceByPack.set(name, display);
+        qsa(`[data-price-for="${format.slug}"], [data-dialog-price="${format.slug}"]`).forEach((element) => {
+          element.textContent = display;
+        });
+        if (format.pricing) pricedFormats += 1;
+      });
+      checkoutReady = payload.meta?.pricingStatus === 'available' && pricedFormats === packNames.length;
+      checkoutSubmit.disabled = !checkoutReady;
+      setStatus(
+        checkoutStatus,
+        checkoutReady
+          ? (checkoutWasCancelled ? 'Checkout was canceled. No payment was made; your selected format is still saved.' : 'Secure checkout is available.')
+          : 'Checkout is awaiting final Stripe product configuration.',
+        checkoutReady && !checkoutWasCancelled ? '' : 'error'
+      );
+      updatePack(selectedPack);
+    } catch {
+      qsa('[data-price-for], [data-dialog-price]').forEach((element) => { element.textContent = 'Temporarily unavailable'; });
+      checkoutSubmit.disabled = true;
+      setStatus(checkoutStatus, 'Prices could not be loaded. Please try again shortly.', 'error');
+    }
   };
 
   const clearFormErrors = (form) => {
@@ -182,46 +230,37 @@
   };
 
   const dialog = qs('[data-dialog]');
-  const dialogForm = qs('[data-dialog-form]');
+  const checkoutForm = qs('[data-checkout-form]');
   const dialogContent = qs('[data-dialog-content]');
-  const dialogSuccess = qs('[data-dialog-success]');
-  const successCopy = qs('[data-success-copy]');
-  const dialogStatus = qs('[data-dialog-status]');
   qsa('[data-open-ritual]').forEach((button) => button.addEventListener('click', () => {
     const radio = qs(`input[name="pack"][value="${selectedPack}"]`);
     if (radio) radio.checked = true;
-    clearFormErrors(dialogForm);
-    setStatus(dialogStatus, '');
-    dialogContent.hidden = false; dialogSuccess.hidden = true;
+    dialogContent.hidden = false;
     if (typeof dialog.showModal === 'function') dialog.showModal();
   }));
-  dialogForm?.addEventListener('submit', async (event) => {
-    const submitter = event.submitter;
-    if (submitter?.value === 'cancel' || submitter?.value === 'close') return;
+  qs('[data-dialog-close]')?.addEventListener('click', () => dialog.close());
+  checkoutForm?.addEventListener('submit', async (event) => {
     event.preventDefault();
-    clearFormErrors(dialogForm);
-    const formData = new FormData(dialogForm);
+    const formData = new FormData(checkoutForm);
     const value = formData.get('pack') || selectedPack;
     updatePack(String(value));
-    setSubmitState(dialogForm, true);
-    setStatus(dialogStatus, 'Adding you to the private pre-launch list…');
+    if (!checkoutReady) {
+      setStatus(checkoutStatus, 'Secure checkout is not available yet. Please try again shortly.', 'error');
+      return;
+    }
+    checkoutSubmit.disabled = true;
+    checkoutSubmit.textContent = 'Preparing secure checkout…';
+    setStatus(checkoutStatus, 'Creating a protected Stripe Checkout Session…');
     try {
-      const payload = await postJson('/api/v1/waitlist', {
-        name: formData.get('name'),
-        email: formData.get('email'),
-        country: formData.get('country'),
-        preferredFormat: value,
-        website: formData.get('website'),
-        consent: formData.get('consent') === 'on',
-        source: 'website-dialog'
+      const payload = await postJson('/api/v1/checkout/sessions', {
+        formatSlug: packSlugs[String(value)],
+        quantity: Number(formData.get('quantity'))
       });
-      dialogContent.hidden = true; dialogSuccess.hidden = false;
-      successCopy.textContent = `${value} is saved as your preference. ${payload.message}`;
+      window.location.assign(payload.data.url);
     } catch (error) {
-      showFormErrors(dialogForm, error.details);
-      setStatus(dialogStatus, `${error.message} Your format is still saved on this device.`, 'error');
-    } finally {
-      setSubmitState(dialogForm, false);
+      setStatus(checkoutStatus, `${error.message} No payment was made.`, 'error');
+      checkoutSubmit.disabled = false;
+      checkoutSubmit.textContent = 'Continue to secure checkout';
     }
   });
   dialog?.addEventListener('click', (event) => {
@@ -229,6 +268,14 @@
     const outside = event.clientX < rect.left || event.clientX > rect.right || event.clientY < rect.top || event.clientY > rect.bottom;
     if (outside) dialog.close();
   });
+
+  const currentUrl = new URL(window.location.href);
+  if (checkoutWasCancelled) {
+    if (typeof dialog.showModal === 'function') dialog.showModal();
+    setStatus(checkoutStatus, 'Checkout was canceled. No payment was made; your selected format is still saved.', 'error');
+    currentUrl.searchParams.delete('checkout');
+    window.history.replaceState({}, '', `${currentUrl.pathname}${currentUrl.search}${currentUrl.hash}`);
+  }
 
   const inquiryForm = qs('[data-inquiry-form]');
   const inquiryStatus = qs('[data-inquiry-status]');
@@ -258,4 +305,6 @@
       setSubmitState(inquiryForm, false);
     }
   });
+
+  loadCatalog();
 })();
