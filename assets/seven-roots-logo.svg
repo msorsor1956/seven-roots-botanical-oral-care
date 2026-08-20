@@ -1,0 +1,17 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 980 240" role="img" aria-labelledby="title desc">
+  <title id="title">Seven Roots logo</title>
+  <desc id="desc">A botanical root and brush symbol beside the words Seven Roots, African Botanical Oral Care.</desc>
+  <g fill="none" stroke="#B48A4A" stroke-linecap="round" stroke-linejoin="round">
+    <circle cx="118" cy="120" r="91" stroke-width="3"/>
+    <path d="M118 52v63" stroke-width="7"/>
+    <path d="M118 66 85 47M118 66l33-19M118 85 75 70M118 85l43-15" stroke-width="5"/>
+    <path d="M78 42v23M91 36v29M105 33v32M118 31v34M131 33v32M145 36v29M158 42v23" stroke-width="4"/>
+    <path d="M118 115c-4 31-20 45-39 60M118 115c4 31 20 45 39 60M118 117v72M103 145 94 190M133 145l9 45M91 158l-22 25M145 158l22 25" stroke-width="5"/>
+  </g>
+  <g fill="#173D32">
+    <text x="244" y="111" font-family="Georgia, 'Times New Roman', serif" font-size="74" letter-spacing="8">SEVEN ROOTS</text>
+    <text x="250" y="160" font-family="Arial, Helvetica, sans-serif" font-size="20" font-weight="700" letter-spacing="5">AFRICAN BOTANICAL ORAL CARE</text>
+  </g>
+  <path d="M248 188h610" stroke="#C86C3A" stroke-width="4"/>
+  <text x="250" y="218" fill="#5A5D51" font-family="Georgia, 'Times New Roman', serif" font-size="22" font-style="italic" letter-spacing="1">Ancient roots. Modern ritual.</text>
+</svg>
