@@ -21,6 +21,12 @@
   let staffRoles = [];
   let adminTasks = [];
 
+  const normalizeAdminKey = (value) => {
+    const normalized = String(value || '').replace(/[\u200B-\u200D\uFEFF]/gu, '').trim();
+    const matches = [...normalized.matchAll(/sr_admin_[A-Za-z0-9_-]{64}/gu)];
+    return matches.at(-1)?.[0] || normalized;
+  };
+
   const setStatus = (element, message, isError = false) => {
     element.textContent = message;
     element.classList.toggle('is-error', isError);
@@ -896,8 +902,21 @@
     const button = qs('button[type="submit"]', loginForm);
     button.disabled = true;
     setStatus(loginStatus, 'Verifying private access…');
-    apiKey = String(new FormData(loginForm).get('apiKey') || '').trim();
-    try { await unlock(); } catch {} finally { button.disabled = false; }
+    apiKey = normalizeAdminKey(new FormData(loginForm).get('apiKey'));
+    try {
+      await unlock();
+    } catch {
+      loginForm.elements.apiKey.value = '';
+      loginForm.elements.apiKey.focus();
+      setStatus(loginStatus, 'That saved key was rejected. Paste the current key-only line; the field has been cleared.', true);
+    } finally { button.disabled = false; }
+  });
+
+  loginForm.elements.apiKey.addEventListener('focus', (event) => event.currentTarget.select());
+  loginForm.elements.apiKey.addEventListener('paste', () => {
+    setTimeout(() => {
+      loginForm.elements.apiKey.value = normalizeAdminKey(loginForm.elements.apiKey.value);
+    }, 0);
   });
 
   qs('[data-refresh]').addEventListener('click', () => loadDashboard().catch((error) => setStatus(dashboardStatus, error.message, true)));

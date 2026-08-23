@@ -29,7 +29,8 @@
       <h1>Enter the private studio.</h1>
       <p>Review signed orders, inventory, payment records, financial reports, launch interest, and partnership inquiries. The API key remains in this browser tab only and is cleared when you lock the studio.</p>
       <form data-login-form>
-        <label><span>Admin API key</span><input name="apiKey" type="password" autocomplete="current-password" required></label>
+        <label><span>Admin API key</span><input name="apiKey" type="password" autocomplete="off" autocapitalize="none" spellcheck="false" data-lpignore="true" data-1p-ignore="true" required></label>
+        <small class="login-help">Paste the current key-only line. Saved browser passwords are ignored.</small>
         <button type="submit">Unlock dashboard</button>
         <p class="login-status" data-login-status role="status" aria-live="polite"></p>
       </form>
