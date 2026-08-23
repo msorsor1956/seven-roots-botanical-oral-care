@@ -2,12 +2,20 @@
   const qs = (selector, root = document) => root.querySelector(selector);
   const qsa = (selector, root = document) => [...root.querySelectorAll(selector)];
   const accessShell = qs('[data-access-shell]');
+  const onboardingShell = qs('[data-onboarding]');
   const operations = qs('[data-operations]');
   const sessionActions = qs('[data-session-actions]');
   const workspaceStatus = qs('[data-workspace-status]');
+  const loginForm = qs('[data-login-form]');
+  const temporaryPasswordForm = qs('[data-temporary-password-form]');
+  const passwordChangeForm = qs('[data-password-change-form]');
+  const inviteForm = qs('[data-invite-form]');
+  const accessForms = [loginForm, temporaryPasswordForm, passwordChangeForm, inviteForm];
   const csrfStorageKey = 'seven-roots-staff-csrf';
   let csrfToken = sessionStorage.getItem(csrfStorageKey) || '';
   let workspace = null;
+  let onboarding = null;
+  let activeTrainingModuleId = '';
 
   const permission = (name) => Boolean(workspace?.user?.permissions?.includes(name));
   const locationLabel = (location) => location === 'us' ? 'U.S. fulfillment' : location === 'liberia' ? 'Liberia warehouse' : 'Both locations';
@@ -22,6 +30,10 @@
   const setStatus = (element, message, isError = false) => {
     element.textContent = message;
     element.classList.toggle('is-error', isError);
+  };
+  const showAccessForm = (form) => {
+    accessShell.hidden = false;
+    for (const candidate of accessForms) candidate.hidden = candidate !== form;
   };
   const statusClass = (value) => {
     if (['blocked', 'changes_requested', 'sold_out', 'rejected', 'returned', 'inactive'].includes(value)) return ' is-danger';
@@ -99,6 +111,207 @@
     await api(path, options);
     await loadWorkspace();
     setStatus(workspaceStatus, message);
+  };
+
+  const todayInputValue = () => {
+    const now = new Date();
+    const local = new Date(now.valueOf() - now.getTimezoneOffset() * 60 * 1000);
+    return local.toISOString().slice(0, 10);
+  };
+
+  const onboardingStatusLabel = (value) => ({
+    not_started: 'Not started',
+    in_progress: 'Training in progress',
+    pending_review: 'Pending management review',
+    changes_requested: 'Changes requested',
+    approved: 'Approved'
+  })[value] || statusLabel(value);
+
+  const renderTrainingLesson = () => {
+    const stage = qs('[data-training-lesson]');
+    stage.replaceChildren();
+    const module = onboarding.catalog.find((item) => item.id === activeTrainingModuleId) || onboarding.catalog[0];
+    if (!module) return;
+    activeTrainingModuleId = module.id;
+    const completed = onboarding.completedModuleIds.includes(module.id);
+    const locked = onboarding.status === 'pending_review';
+
+    const header = document.createElement('header');
+    const number = document.createElement('span');
+    number.className = 'lesson-number';
+    number.textContent = String(module.order).padStart(2, '0');
+    const heading = document.createElement('div');
+    const meta = document.createElement('p');
+    meta.className = 'lesson-meta';
+    meta.textContent = `${module.code} · ${module.duration}${completed ? ' · Complete' : ''}`;
+    const title = document.createElement('h2');
+    title.textContent = module.title;
+    const objective = document.createElement('p');
+    objective.textContent = module.objective;
+    heading.append(meta, title, objective);
+    header.append(number, heading);
+
+    const sections = document.createElement('div');
+    sections.className = 'lesson-sections';
+    module.sections.forEach((item) => {
+      const section = document.createElement('section');
+      const sectionTitle = document.createElement('h3');
+      sectionTitle.textContent = item.heading;
+      const list = document.createElement('ul');
+      item.points.forEach((point) => {
+        const li = document.createElement('li');
+        li.textContent = point;
+        list.append(li);
+      });
+      section.append(sectionTitle, list);
+      sections.append(section);
+    });
+
+    const check = document.createElement('form');
+    check.className = 'knowledge-check';
+    const label = document.createElement('p');
+    label.className = 'form-label';
+    label.textContent = 'Knowledge check';
+    const question = document.createElement('h3');
+    question.textContent = module.question;
+    const options = document.createElement('fieldset');
+    options.disabled = locked;
+    module.options.forEach((option) => {
+      const optionLabel = document.createElement('label');
+      const input = document.createElement('input');
+      input.type = 'radio';
+      input.name = 'answer';
+      input.value = option.id;
+      input.required = true;
+      const copy = document.createElement('span');
+      copy.textContent = option.label;
+      optionLabel.append(input, copy);
+      options.append(optionLabel);
+    });
+    const button = document.createElement('button');
+    button.type = 'submit';
+    button.disabled = locked;
+    button.textContent = completed ? 'Review and reconfirm module' : 'Complete module';
+    check.addEventListener('submit', async (event) => {
+      event.preventDefault();
+      const form = new FormData(check);
+      button.disabled = true;
+      setStatus(qs('[data-onboarding-message]'), `Checking ${module.title}…`);
+      try {
+        onboarding = await api(`/api/v1/staff/onboarding/modules/${encodeURIComponent(module.id)}/complete`, {
+          method: 'POST', body: { answer: form.get('answer') }
+        });
+        const next = onboarding.catalog.find((item) => !onboarding.completedModuleIds.includes(item.id));
+        activeTrainingModuleId = next?.id || module.id;
+        renderOnboarding();
+        setStatus(qs('[data-onboarding-message]'), `${module.title} completed. Your progress was saved.`);
+      } catch (error) {
+        setStatus(qs('[data-onboarding-message]'), error.message, true);
+        button.disabled = false;
+      }
+    });
+    check.append(label, question, options, button);
+    stage.append(header, sections, check);
+  };
+
+  const renderOnboardingReviewState = () => {
+    const panel = qs('[data-onboarding-review-state]');
+    panel.replaceChildren();
+    const pending = onboarding.status === 'pending_review';
+    const changes = onboarding.status === 'changes_requested';
+    panel.hidden = !(pending || changes);
+    if (panel.hidden) return;
+    panel.className = `onboarding-review-state${changes ? ' is-changes' : ''}`;
+    const symbol = document.createElement('span');
+    symbol.className = 'review-state-symbol';
+    symbol.textContent = pending ? '…' : '!';
+    const copy = document.createElement('div');
+    const title = document.createElement('h2');
+    title.textContent = pending ? 'Your record is with management' : 'Management requested changes';
+    const body = document.createElement('p');
+    body.textContent = pending
+      ? `Submitted ${formatDate(onboarding.submittedAt)}. Your staff dashboard will open after an authorized manager reviews and signs this record.`
+      : (onboarding.review?.note || 'Review the training record, make the requested correction, and submit it again.');
+    copy.append(title, body);
+    if (onboarding.review?.reviewedByName) {
+      const reviewer = document.createElement('small');
+      reviewer.textContent = `${onboarding.review.reviewedByName} · ${formatDate(onboarding.review.reviewedAt)}`;
+      copy.append(reviewer);
+    }
+    panel.append(symbol, copy);
+  };
+
+  const renderOnboarding = () => {
+    accessShell.hidden = true;
+    operations.hidden = true;
+    onboardingShell.hidden = false;
+    sessionActions.hidden = false;
+    qs('[data-session-identity]').textContent = `${onboarding.user.name} | Onboarding`;
+    qs('[data-onboarding-employee]').textContent = `${onboarding.user.employeeNumber} · ${onboarding.user.name}`;
+    qs('[data-onboarding-status]').textContent = onboardingStatusLabel(onboarding.status);
+    qs('[data-onboarding-progress]').textContent = `${onboarding.completedModules} of ${onboarding.totalModules} modules complete`;
+    qs('[data-training-progress-bar]').style.width = `${Math.round((onboarding.completedModules / Math.max(1, onboarding.totalModules)) * 100)}%`;
+
+    if (!activeTrainingModuleId) activeTrainingModuleId = onboarding.catalog.find((module) => !onboarding.completedModuleIds.includes(module.id))?.id || onboarding.catalog[0]?.id || '';
+    const moduleList = qs('[data-training-module-list]');
+    moduleList.replaceChildren();
+    onboarding.catalog.forEach((module) => {
+      const button = document.createElement('button');
+      button.type = 'button';
+      button.className = onboarding.completedModuleIds.includes(module.id) ? 'is-complete' : '';
+      if (module.id === activeTrainingModuleId) button.setAttribute('aria-current', 'step');
+      const code = document.createElement('span');
+      code.textContent = module.code;
+      const title = document.createElement('strong');
+      title.textContent = module.title;
+      const state = document.createElement('small');
+      state.textContent = onboarding.completedModuleIds.includes(module.id) ? 'Complete' : module.duration;
+      button.append(code, title, state);
+      button.addEventListener('click', () => {
+        activeTrainingModuleId = module.id;
+        renderOnboarding();
+      });
+      moduleList.append(button);
+    });
+    renderTrainingLesson();
+
+    const formSection = qs('[data-onboarding-submit]');
+    formSection.hidden = onboarding.status === 'pending_review';
+    const form = qs('[data-onboarding-form]');
+    form.elements.signedName.value = onboarding.signedName || onboarding.user.name;
+    form.elements.signedDate.value = onboarding.signedDate || todayInputValue();
+    const photoUrl = onboarding.employeePhotoUrl || onboarding.currentEmployeePhotoUrl;
+    const signatureUrl = onboarding.employeeSignatureUrl || onboarding.currentEmployeeSignatureUrl;
+    const photo = qs('[data-onboarding-photo]');
+    const signature = qs('[data-onboarding-signature]');
+    photo.hidden = !photoUrl;
+    signature.hidden = !signatureUrl;
+    qs('[data-onboarding-photo-empty]').hidden = Boolean(photoUrl);
+    qs('[data-onboarding-signature-empty]').hidden = Boolean(signatureUrl);
+    if (photoUrl) photo.src = photoUrl;
+    if (signatureUrl) signature.src = signatureUrl;
+    const acknowledgments = qs('[data-onboarding-acknowledgments]');
+    acknowledgments.replaceChildren();
+    const legend = document.createElement('legend');
+    legend.textContent = 'Required acknowledgments';
+    acknowledgments.append(legend);
+    onboarding.requiredAcknowledgments.forEach((item) => {
+      const label = document.createElement('label');
+      const input = document.createElement('input');
+      input.type = 'checkbox';
+      input.name = 'acknowledgments';
+      input.value = item.id;
+      input.required = true;
+      input.checked = onboarding.acknowledgments.includes(item.id);
+      const text = document.createElement('span');
+      text.textContent = item.label;
+      label.append(input, text);
+      acknowledgments.append(label);
+    });
+    const submit = qs('[data-onboarding-submit-button]');
+    submit.disabled = onboarding.completedModules !== onboarding.totalModules;
+    submit.title = submit.disabled ? 'Complete all four training modules first.' : '';
+    renderOnboardingReviewState();
   };
 
   const renderTasks = () => {
@@ -824,6 +1037,178 @@
     signature.hidden = !workspace.user.signatureUrl;
     signatureEmpty.hidden = Boolean(workspace.user.signatureUrl);
     if (workspace.user.signatureUrl) signature.src = workspace.user.signatureUrl;
+    const certificate = qs('[data-onboarding-certificate]');
+    certificate.replaceChildren();
+    const record = workspace.onboarding;
+    certificate.hidden = !(record?.user?.onboardingRequired && record.status === 'approved' && record.review);
+    if (!certificate.hidden) {
+      const check = document.createElement('span');
+      check.className = 'certificate-check';
+      check.textContent = '✓';
+      const copy = document.createElement('div');
+      const kicker = document.createElement('small');
+      kicker.textContent = 'Approved onboarding record';
+      const title = document.createElement('h3');
+      title.textContent = 'Training complete. Dashboard authorized.';
+      const detail = document.createElement('p');
+      detail.textContent = `${record.completedModules} modules · Employee signed ${record.signedDate} · Approved by ${record.review.reviewedByName} on ${formatDate(record.review.reviewedAt)}`;
+      copy.append(kicker, title, detail);
+      const manager = document.createElement('div');
+      manager.className = 'certificate-manager';
+      if (record.review.managerPhotoUrl) {
+        const managerPhoto = document.createElement('img');
+        managerPhoto.src = record.review.managerPhotoUrl;
+        managerPhoto.alt = `${record.review.reviewedByName} manager profile`;
+        manager.append(managerPhoto);
+      }
+      if (record.review.managerSignatureUrl) {
+        const managerSignature = document.createElement('img');
+        managerSignature.className = 'certificate-signature';
+        managerSignature.src = record.review.managerSignatureUrl;
+        managerSignature.alt = `${record.review.reviewedByName} approval signature`;
+        manager.append(managerSignature);
+      }
+      certificate.append(check, copy, manager);
+    }
+  };
+
+  const renderOnboardingReviews = () => {
+    const list = qs('[data-onboarding-review-list]');
+    list.replaceChildren();
+    if (!permission('onboarding.review') || !workspace.onboardingReviews?.length) {
+      const empty = document.createElement('p');
+      empty.className = 'empty';
+      empty.textContent = permission('onboarding.review')
+        ? 'No employee onboarding records are waiting or recently reviewed.'
+        : 'Onboarding review is not assigned to this role.';
+      list.append(empty);
+      return;
+    }
+    workspace.onboardingReviews.forEach((record) => {
+      const card = document.createElement('article');
+      card.className = `onboarding-review-card is-${record.status}`;
+      const employee = document.createElement('div');
+      employee.className = 'onboarding-review-employee';
+      const portrait = document.createElement('span');
+      portrait.className = 'review-employee-photo';
+      if (record.employeePhotoUrl) {
+        const image = document.createElement('img');
+        image.src = record.employeePhotoUrl;
+        image.alt = `${record.user.name} employee profile`;
+        portrait.append(image);
+      } else {
+        portrait.textContent = record.user.name.split(/\s+/).map((part) => part[0]).join('').slice(0, 2).toUpperCase();
+      }
+      const identity = document.createElement('div');
+      const eyebrow = document.createElement('small');
+      eyebrow.textContent = `${record.user.employeeNumber} · ${record.user.roleLabel}`;
+      const name = document.createElement('h3');
+      name.textContent = record.user.name;
+      const location = document.createElement('p');
+      location.textContent = `${record.user.locations.map(locationLabel).join(' and ')} · Submitted ${formatDate(record.submittedAt)}`;
+      identity.append(eyebrow, name, location);
+      employee.append(portrait, identity, makeStatus(record.status));
+
+      const recordGrid = document.createElement('dl');
+      [
+        ['Training', `${record.completedModules} of ${record.totalModules} modules complete`],
+        ['Signed name', record.signedName || 'Not provided'],
+        ['Date signed', record.signedDate || 'Not provided'],
+        ['Submitted', formatDate(record.submittedAt)]
+      ].forEach(([term, value]) => {
+        const item = document.createElement('div');
+        const dt = document.createElement('dt');
+        dt.textContent = term;
+        const dd = document.createElement('dd');
+        dd.textContent = value;
+        item.append(dt, dd);
+        recordGrid.append(item);
+      });
+
+      const evidence = document.createElement('div');
+      evidence.className = 'onboarding-signature-evidence';
+      const employeeSignature = document.createElement('figure');
+      const signatureLabel = document.createElement('figcaption');
+      signatureLabel.textContent = 'Employee signature';
+      employeeSignature.append(signatureLabel);
+      if (record.employeeSignatureUrl) {
+        const image = document.createElement('img');
+        image.src = record.employeeSignatureUrl;
+        image.alt = `${record.user.name} signature`;
+        employeeSignature.append(image);
+      }
+      evidence.append(employeeSignature);
+
+      if (record.review?.managerSignatureUrl) {
+        const managerSignature = document.createElement('figure');
+        managerSignature.className = 'manager-review-proof';
+        const managerLabel = document.createElement('figcaption');
+        managerLabel.textContent = `Reviewed by ${record.review.reviewedByName}`;
+        if (record.review.managerPhotoUrl) {
+          const managerPhoto = document.createElement('img');
+          managerPhoto.className = 'manager-review-photo';
+          managerPhoto.src = record.review.managerPhotoUrl;
+          managerPhoto.alt = `${record.review.reviewedByName} manager profile`;
+          managerSignature.append(managerLabel, managerPhoto);
+        } else {
+          managerSignature.append(managerLabel);
+        }
+        const image = document.createElement('img');
+        image.src = record.review.managerSignatureUrl;
+        image.alt = `${record.review.reviewedByName} approval signature`;
+        managerSignature.append(image);
+        evidence.append(managerSignature);
+      }
+
+      card.append(employee, recordGrid, evidence);
+      if (record.status === 'pending_review') {
+        const form = document.createElement('form');
+        form.className = 'onboarding-review-form';
+        const note = document.createElement('textarea');
+        note.maxLength = 1200;
+        note.placeholder = 'Approval note or the corrections required';
+        note.setAttribute('aria-label', `Review note for ${record.user.name}`);
+        const approve = document.createElement('button');
+        approve.type = 'button';
+        approve.textContent = 'Approve and open dashboard';
+        approve.disabled = !workspace.user.profileReady;
+        approve.title = workspace.user.profileReady ? '' : 'Upload your manager photo and signature in My profile first.';
+        approve.addEventListener('click', async () => {
+          approve.disabled = true;
+          try {
+            await runWorkspaceAction(`/api/v1/staff/onboarding/reviews/${encodeURIComponent(record.user.id)}`, {
+              method: 'POST', body: { decision: 'approve', reviewNote: note.value }
+            }, `${record.user.name}'s onboarding was approved. Dashboard access is open.`);
+          } catch (error) {
+            setStatus(workspaceStatus, error.message, true);
+            approve.disabled = !workspace.user.profileReady;
+          }
+        });
+        const changes = document.createElement('button');
+        changes.type = 'button';
+        changes.className = 'secondary';
+        changes.textContent = 'Request changes';
+        changes.addEventListener('click', async () => {
+          changes.disabled = true;
+          try {
+            await runWorkspaceAction(`/api/v1/staff/onboarding/reviews/${encodeURIComponent(record.user.id)}`, {
+              method: 'POST', body: { decision: 'request_changes', reviewNote: note.value }
+            }, `${record.user.name}'s onboarding was returned for changes.`);
+          } catch (error) {
+            setStatus(workspaceStatus, error.message, true);
+            changes.disabled = false;
+          }
+        });
+        form.append(note, approve, changes);
+        card.append(form);
+      } else if (record.review) {
+        const reviewNote = document.createElement('p');
+        reviewNote.className = 'onboarding-review-note';
+        reviewNote.textContent = `${record.review.reviewedByName} · ${formatDate(record.review.reviewedAt)}${record.review.note ? ` · ${record.review.note}` : ''}`;
+        card.append(reviewNote);
+      }
+      list.append(card);
+    });
   };
 
   const renderNavigation = () => {
@@ -834,6 +1219,7 @@
       orders: permission('orders.view'),
       finance: permission('finance.view'),
       contacts: permission('directory.view'),
+      onboarding: permission('onboarding.review'),
       profile: permission('profile.update'),
       audit: permission('audit.view')
     };
@@ -859,6 +1245,7 @@
     renderOrders();
     renderFinance();
     renderContacts();
+    renderOnboardingReviews();
     renderProfile();
     renderAudit();
     renderNavigation();
@@ -870,6 +1257,7 @@
     renderWorkspace();
     setStatus(workspaceStatus, `Updated ${new Date().toLocaleTimeString()}.`);
     accessShell.hidden = true;
+    onboardingShell.hidden = true;
     operations.hidden = false;
     sessionActions.hidden = false;
   };
@@ -917,6 +1305,36 @@
     } catch (error) { setStatus(workspaceStatus, error.message, true); } finally { button.disabled = false; }
   });
 
+  qs('[data-onboarding-form]').addEventListener('submit', async (event) => {
+    event.preventDefault();
+    const formElement = event.currentTarget;
+    const form = new FormData(formElement);
+    const button = qs('[data-onboarding-submit-button]');
+    button.disabled = true;
+    try {
+      setStatus(qs('[data-onboarding-message]'), 'Securing your employee photo and signature…');
+      const photo = form.get('profilePhoto');
+      if (photo instanceof File && photo.size) await uploadFile('/api/v1/staff/profile/files/profile_photo', photo);
+      const signature = form.get('signature');
+      if (signature instanceof File && signature.size) await uploadFile('/api/v1/staff/profile/files/signature', signature);
+      onboarding = await api('/api/v1/staff/onboarding/submit', {
+        method: 'POST',
+        body: {
+          signedName: form.get('signedName'),
+          signedDate: form.get('signedDate'),
+          acknowledgments: form.getAll('acknowledgments').map(String)
+        }
+      });
+      formElement.elements.profilePhoto.value = '';
+      formElement.elements.signature.value = '';
+      renderOnboarding();
+      setStatus(qs('[data-onboarding-message]'), 'Your signed onboarding record was sent to management. Dashboard access remains locked until approval.');
+    } catch (error) {
+      setStatus(qs('[data-onboarding-message]'), error.message, true);
+      button.disabled = onboarding?.completedModules !== onboarding?.totalModules;
+    }
+  });
+
   qs('[data-profile-form]').addEventListener('submit', async (event) => {
     event.preventDefault();
     const formElement = event.currentTarget;
@@ -956,13 +1374,32 @@
     } catch (error) { setStatus(workspaceStatus, error.message, true); } finally { button.disabled = false; }
   });
 
+  const loadAuthenticatedExperience = async () => {
+    onboarding = await api('/api/v1/staff/onboarding');
+    if (onboarding.dashboardAccess) {
+      await loadWorkspace();
+      return;
+    }
+    renderOnboarding();
+  };
+
   const establishSession = async (data) => {
     csrfToken = data.csrfToken;
     sessionStorage.setItem(csrfStorageKey, csrfToken);
-    await loadWorkspace();
+    if (data.user?.passwordChangeRequired) {
+      operations.hidden = true;
+      onboardingShell.hidden = true;
+      sessionActions.hidden = false;
+      qs('[data-refresh]').hidden = true;
+      qs('[data-session-identity]').textContent = `${data.user.name} | Password update`;
+      showAccessForm(passwordChangeForm);
+      return;
+    }
+    qs('[data-refresh]').hidden = false;
+    await loadAuthenticatedExperience();
   };
 
-  qs('[data-login-form]').addEventListener('submit', async (event) => {
+  loginForm.addEventListener('submit', async (event) => {
     event.preventDefault();
     const form = new FormData(event.currentTarget);
     const button = qs('button[type="submit"]', event.currentTarget);
@@ -974,7 +1411,55 @@
     } catch (error) { setStatus(qs('[data-login-status]'), error.message, true); } finally { button.disabled = false; }
   });
 
-  qs('[data-invite-form]').addEventListener('submit', async (event) => {
+  qs('[data-show-temporary-password]').addEventListener('click', () => {
+    setStatus(qs('[data-login-status]'), '');
+    showAccessForm(temporaryPasswordForm);
+    temporaryPasswordForm.elements.email.focus();
+  });
+
+  qsa('[data-return-login]').forEach((button) => button.addEventListener('click', () => {
+    showAccessForm(loginForm);
+    loginForm.elements.email.focus();
+  }));
+
+  temporaryPasswordForm.addEventListener('submit', async (event) => {
+    event.preventDefault();
+    const form = new FormData(event.currentTarget);
+    const button = qs('button[type="submit"]', event.currentTarget);
+    button.disabled = true;
+    setStatus(qs('[data-temporary-password-status]'), 'Requesting a secure temporary password...');
+    try {
+      await api('/api/v1/staff/auth/temporary-password/request', {
+        method: 'POST', body: { email: form.get('email') }
+      });
+      setStatus(qs('[data-temporary-password-status]'), 'If this email matches an active staff account, a one-time temporary password is on its way. Check your inbox and spam folder.');
+    } catch (error) {
+      setStatus(qs('[data-temporary-password-status]'), error.message, true);
+    } finally { button.disabled = false; }
+  });
+
+  passwordChangeForm.addEventListener('submit', async (event) => {
+    event.preventDefault();
+    const form = new FormData(event.currentTarget);
+    const button = qs('button[type="submit"]', event.currentTarget);
+    if (form.get('password') !== form.get('confirmation')) {
+      setStatus(qs('[data-password-change-status]'), 'The password confirmation does not match.', true);
+      return;
+    }
+    button.disabled = true;
+    setStatus(qs('[data-password-change-status]'), 'Securing your private staff password...');
+    try {
+      await establishSession(await api('/api/v1/staff/auth/change-password', {
+        method: 'POST', body: { password: form.get('password') }
+      }));
+      event.currentTarget.reset();
+    } catch (error) {
+      const detail = Object.values(error.details || {})[0];
+      setStatus(qs('[data-password-change-status]'), detail || error.message, true);
+    } finally { button.disabled = false; }
+  });
+
+  inviteForm.addEventListener('submit', async (event) => {
     event.preventDefault();
     const form = new FormData(event.currentTarget);
     const button = qs('button[type="submit"]', event.currentTarget);
@@ -986,33 +1471,39 @@
     setStatus(qs('[data-invite-status]'), 'Activating your staff account...');
     try {
       await establishSession(await api('/api/v1/staff/auth/accept-invite', { method: 'POST', body: { token: form.get('token'), password: form.get('password') } }));
-      history.replaceState({}, document.title, 'staff');
+      history.replaceState({}, document.title, '/staff');
     } catch (error) {
       const detail = Object.values(error.details || {})[0];
       setStatus(qs('[data-invite-status]'), detail || error.message, true);
     } finally { button.disabled = false; }
   });
 
-  qs('[data-refresh]').addEventListener('click', () => loadWorkspace().catch((error) => setStatus(workspaceStatus, error.message, true)));
-  qs('[data-sign-out]').addEventListener('click', async () => {
+  qs('[data-refresh]').addEventListener('click', () => loadAuthenticatedExperience().catch((error) => {
+    const target = onboardingShell.hidden ? workspaceStatus : qs('[data-onboarding-message]');
+    setStatus(target, error.message, true);
+  }));
+  const signOut = async () => {
     try { await api('/api/v1/staff/auth/logout', { method: 'POST', body: {} }); } catch {}
     csrfToken = '';
     sessionStorage.removeItem(csrfStorageKey);
     workspace = null;
+    onboarding = null;
+    activeTrainingModuleId = '';
     operations.hidden = true;
+    onboardingShell.hidden = true;
     sessionActions.hidden = true;
-    accessShell.hidden = false;
-    qs('[data-login-form]').hidden = false;
-    qs('[data-invite-form]').hidden = true;
-    history.replaceState({}, document.title, 'staff');
-  });
+    qs('[data-refresh]').hidden = false;
+    showAccessForm(loginForm);
+    history.replaceState({}, document.title, '/staff');
+  };
+  qs('[data-sign-out]').addEventListener('click', signOut);
+  qs('[data-password-change-sign-out]').addEventListener('click', signOut);
 
   const invitationToken = new URLSearchParams(location.search).get('invite');
   if (invitationToken) {
-    qs('[data-login-form]').hidden = true;
-    const inviteForm = qs('[data-invite-form]');
-    inviteForm.hidden = false;
     inviteForm.elements.token.value = invitationToken;
+    history.replaceState({}, document.title, '/staff');
+    showAccessForm(inviteForm);
   } else {
     api('/api/v1/staff/auth/session')
       .then((data) => establishSession(data))

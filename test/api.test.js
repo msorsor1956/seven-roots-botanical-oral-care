@@ -106,7 +106,7 @@ test("serves the storefront and health endpoint", async () => {
     assert.equal(health.status, 200);
     const healthPayload = await health.json();
     assert.equal(healthPayload.status, "ok");
-    assert.equal(healthPayload.version, "1.10.0");
+    assert.equal(healthPayload.version, "1.12.0");
     const admin = await fetch(`${baseUrl}/admin`);
     assert.equal(admin.status, 200);
     const adminPage = await admin.text();

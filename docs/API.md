@@ -216,17 +216,25 @@ Admin allocation does not bypass staff approval. The assigned employee must subm
 
 ## Staff authentication and operations
 
-Staff authentication uses an `HttpOnly`, `SameSite=Lax` session cookie. The invitation acceptance and login response also returns a CSRF token; send it as `X-CSRF-Token` on every staff mutation. Passwords must contain 12 to 128 characters. Invitation links expire, are single-use, and are stored only as hashes.
+Staff authentication uses an `HttpOnly`, `Secure` (production), `SameSite=Strict`, high-priority session cookie. Invitation acceptance and login responses also return a CSRF token; send it as `X-CSRF-Token` on every staff mutation. Passwords must contain 12 to 128 characters. Invitation tokens and emailed temporary passwords expire, are single-use, and are stored only as hashes.
 
 Authentication:
 
 - `POST /api/v1/staff/auth/accept-invite`
+- `POST /api/v1/staff/auth/temporary-password/request`
 - `POST /api/v1/staff/auth/login`
 - `GET /api/v1/staff/auth/session`
+- `POST /api/v1/staff/auth/change-password`
 - `POST /api/v1/staff/auth/logout`
+
+`POST /api/v1/staff/auth/temporary-password/request` accepts `{ "email": "employee@example.com" }` and always returns the same `202` response for active, inactive, invited, and unknown accounts. For an eligible active account, Resend delivers a cryptographically random temporary password that expires after 30 minutes and works once. Its restricted session returns `user.passwordChangeRequired: true`; every staff-data route returns `password_change_required` until `POST /api/v1/staff/auth/change-password` receives a different private password with the session CSRF token. Completion rotates the session and revokes every older session. A delivery failure invalidates the undelivered temporary password and does not replace the employee's existing password.
 
 Operations:
 
+- `GET /api/v1/staff/onboarding`
+- `POST /api/v1/staff/onboarding/modules/:moduleId/complete`
+- `POST /api/v1/staff/onboarding/submit`
+- `POST /api/v1/staff/onboarding/reviews/:employeeId`
 - `GET /api/v1/staff/workspace`
 - `PATCH /api/v1/staff/profile`
 - `POST /api/v1/staff/profile/files/profile_photo`
@@ -244,6 +252,14 @@ Operations:
 - `POST /api/v1/staff/transfers/:transferId/dispatch`
 - `POST /api/v1/staff/transfers/:transferId/receive`
 - `PATCH /api/v1/staff/orders/:orderId/fulfillment`
+
+### Onboarding access gate
+
+Front-line staff roles must complete four controlled modules—Personal Hygiene, Workplace Hygiene, Personal Protective Equipment (PPE), and Customer Service Training (CST)—before the operations workspace is available. Each module has a server-validated knowledge check. The employee then uploads a profile photo and signature, types their exact employee name, enters the current date, accepts all required acknowledgments, and submits the record.
+
+While onboarding is `not_started`, `in_progress`, `pending_review`, or `changes_requested`, `GET /api/v1/staff/workspace` and every operational mutation return `403 onboarding_required`. Authentication, onboarding, private identity-file access, profile evidence uploads, refresh, and logout remain available. Owners and location managers retain dashboard access so the review queue cannot deadlock.
+
+An authorized owner or matching location manager reviews a `pending_review` record through `/staff`. Reviewers cannot approve themselves and must have their own profile photo and signature. `decision: "approve"` stores the manager name, photo, signature, note, and review timestamp and opens dashboard access. `decision: "request_changes"` requires a correction note and keeps the employee locked until resubmission. The employee's signature and all approval evidence remain private and require an authorized staff session.
 
 ### Task evidence and approval
 

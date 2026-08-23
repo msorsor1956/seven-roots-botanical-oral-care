@@ -84,7 +84,7 @@
     const digits = String(number || '').replace(/\D/g, '');
     return digits ? `https://wa.me/${digits}${message ? `?text=${encodeURIComponent(message)}` : ''}` : '';
   };
-  const statusIsAlert = (value) => !['paid', 'pending', 'in_stock', 'not_tracked', 'active', 'ready', 'synced', 'sent', 'accepted'].includes(value);
+  const statusIsAlert = (value) => !['paid', 'pending', 'in_stock', 'not_tracked', 'active', 'approved', 'ready', 'synced', 'sent', 'accepted'].includes(value);
 
   const addCells = (row, values) => values.forEach((value) => {
     const cell = row.insertCell();
@@ -794,6 +794,7 @@
       const locationsCell = row.insertCell();
       locationsCell.textContent = user.locations.map((location) => location === 'us' ? 'U.S.' : 'Liberia').join(', ');
       addStatusCell(row, user.status);
+      addStatusCell(row, user.onboardingStatus || (user.onboardingRequired ? 'not_started' : 'approved'));
 
       const deliveryCell = row.insertCell();
       deliveryCell.className = 'invitation-delivery';
@@ -845,7 +846,11 @@
           setStatus(qs('[data-staff-form-status]'), error.message, true);
         } finally { invite.disabled = user.status === 'inactive'; }
       });
-      actions.append(status, save, invite);
+      const onboardingReview = document.createElement('a');
+      onboardingReview.href = '/staff';
+      onboardingReview.textContent = 'Open review';
+      onboardingReview.title = 'Management approvals are signed in the staff portal.';
+      actions.append(status, save, invite, onboardingReview);
       actionsCell.append(actions);
     });
   };

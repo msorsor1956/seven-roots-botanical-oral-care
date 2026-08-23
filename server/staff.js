@@ -21,30 +21,33 @@ export const STAFF_ROLES = Object.freeze({
     id: "owner",
     label: "Owner / super admin",
     description: "Full access to staff, operations, finance, integrations, and both locations.",
+    requiresOnboarding: false,
     allowedLocations: ["liberia", "us"],
     defaultLocations: ["liberia", "us"],
     permissions: [
       "staff.manage", "staff.view", "finance.view", "reports.export", "orders.view", "orders.fulfill",
       "inventory.view", "inventory.count", "inventory.approve", "inventory.adjust", "transfers.view",
       "transfers.create", "transfers.approve", "transfers.dispatch", "transfers.receive", "tasks.view",
-      "tasks.manage", "tasks.update", "tasks.approve", "directory.view", "profile.update", "audit.view", "integrations.manage"
+      "tasks.manage", "tasks.update", "tasks.approve", "onboarding.review", "directory.view", "profile.update", "audit.view", "integrations.manage"
     ]
   }),
   liberia_manager: Object.freeze({
     id: "liberia_manager",
     label: "Liberia warehouse manager",
     description: "Runs receiving, quality, counts, packing, and outbound transfer work in Liberia.",
+    requiresOnboarding: false,
     allowedLocations: ["liberia"],
     defaultLocations: ["liberia"],
     permissions: [
       "inventory.view", "inventory.count", "inventory.approve", "transfers.view", "transfers.create",
-      "transfers.dispatch", "tasks.view", "tasks.manage", "tasks.update", "tasks.approve", "directory.view", "profile.update"
+      "transfers.dispatch", "tasks.view", "tasks.manage", "tasks.update", "tasks.approve", "onboarding.review", "directory.view", "profile.update"
     ]
   }),
   liberia_staff: Object.freeze({
     id: "liberia_staff",
     label: "Liberia warehouse staff",
     description: "Completes assigned receiving, quality, packing, and physical count work.",
+    requiresOnboarding: true,
     allowedLocations: ["liberia"],
     defaultLocations: ["liberia"],
     permissions: ["inventory.view", "inventory.count", "transfers.view", "tasks.view", "tasks.update", "directory.view", "profile.update"]
@@ -53,17 +56,19 @@ export const STAFF_ROLES = Object.freeze({
     id: "us_manager",
     label: "U.S. fulfillment manager",
     description: "Runs U.S. receiving, inventory, order fulfillment, returns, and transfer reconciliation.",
+    requiresOnboarding: false,
     allowedLocations: ["us"],
     defaultLocations: ["us"],
     permissions: [
       "orders.view", "orders.fulfill", "inventory.view", "inventory.count", "inventory.approve",
-      "transfers.view", "transfers.receive", "tasks.view", "tasks.manage", "tasks.update", "tasks.approve", "directory.view", "profile.update"
+      "transfers.view", "transfers.receive", "tasks.view", "tasks.manage", "tasks.update", "tasks.approve", "onboarding.review", "directory.view", "profile.update"
     ]
   }),
   us_fulfillment: Object.freeze({
     id: "us_fulfillment",
     label: "U.S. fulfillment staff",
     description: "Picks, packs, ships, receives, and completes assigned U.S. warehouse work.",
+    requiresOnboarding: true,
     allowedLocations: ["us"],
     defaultLocations: ["us"],
     permissions: ["orders.view", "orders.fulfill", "inventory.view", "inventory.count", "transfers.view", "tasks.view", "tasks.update", "directory.view", "profile.update"]
@@ -72,6 +77,7 @@ export const STAFF_ROLES = Object.freeze({
     id: "finance",
     label: "Finance",
     description: "Reviews payment records and financial reports without warehouse write access.",
+    requiresOnboarding: true,
     allowedLocations: ["liberia", "us"],
     defaultLocations: ["liberia", "us"],
     permissions: ["finance.view", "reports.export", "orders.view", "tasks.view", "tasks.update", "directory.view", "profile.update"]
@@ -80,6 +86,7 @@ export const STAFF_ROLES = Object.freeze({
     id: "customer_support",
     label: "Customer support",
     description: "Reviews customer orders and completes support or return tasks without financial controls.",
+    requiresOnboarding: true,
     allowedLocations: ["us"],
     defaultLocations: ["us"],
     permissions: ["orders.view", "tasks.view", "tasks.update", "directory.view", "profile.update"]
@@ -88,11 +95,103 @@ export const STAFF_ROLES = Object.freeze({
     id: "auditor",
     label: "Auditor / read only",
     description: "Read-only access to assigned locations, reports, and operational history.",
+    requiresOnboarding: true,
     allowedLocations: ["liberia", "us"],
     defaultLocations: ["liberia", "us"],
     permissions: ["finance.view", "orders.view", "inventory.view", "transfers.view", "tasks.view", "directory.view", "profile.update", "audit.view"]
   })
 });
+
+export const STAFF_ONBOARDING_MODULES = Object.freeze([
+  Object.freeze({
+    id: "personal_hygiene",
+    order: 1,
+    code: "PH",
+    title: "Personal Hygiene",
+    duration: "8 minutes",
+    objective: "Protect the product, coworkers, and customers by maintaining clean personal habits before and during every shift.",
+    sections: Object.freeze([
+      Object.freeze({ heading: "Arrive ready", points: Object.freeze(["Bathe regularly and report in clean work clothing.", "Keep fingernails short, clean, and free of false nails or loose polish when handling product.", "Cover cuts with a waterproof dressing and a glove when hands may contact product or packaging."]) }),
+      Object.freeze({ heading: "Wash hands correctly", points: Object.freeze(["Wash with soap and clean running water for at least 20 seconds.", "Wash before starting work and after breaks, restroom use, eating, coughing, sneezing, waste handling, or touching unclean surfaces.", "Dry with a clean single-use towel or approved hand dryer; never wipe hands on work clothing."]) }),
+      Object.freeze({ heading: "Report illness", points: Object.freeze(["Tell a manager before work if you have vomiting, diarrhea, fever, an infected skin condition, or another illness that may contaminate product.", "Follow management instructions before returning to product-handling duties."]) })
+    ]),
+    question: "How long should hands be washed with soap and clean running water?",
+    options: Object.freeze([
+      Object.freeze({ id: "five_seconds", label: "About 5 seconds" }),
+      Object.freeze({ id: "twenty_seconds", label: "At least 20 seconds" }),
+      Object.freeze({ id: "only_when_dirty", label: "Only when dirt is visible" })
+    ]),
+    correctAnswer: "twenty_seconds"
+  }),
+  Object.freeze({
+    id: "workplace_hygiene",
+    order: 2,
+    code: "WH",
+    title: "Workplace Hygiene",
+    duration: "9 minutes",
+    objective: "Keep receiving, processing, packing, storage, and fulfillment areas clean enough to prevent contamination and product mix-ups.",
+    sections: Object.freeze([
+      Object.freeze({ heading: "Clean as you go", points: Object.freeze(["Follow the posted cleaning schedule and use only approved cleaning materials.", "Clean and sanitize tools and contact surfaces before work, between incompatible activities, and after contamination.", "Keep chemicals labeled and stored away from chewing sticks, packaging, and shipping supplies."]) }),
+      Object.freeze({ heading: "Control contamination", points: Object.freeze(["Separate incoming raw material, approved product, rejected product, returns, and waste.", "Keep food, drinks, tobacco, and personal items outside product-handling zones.", "Never place product or primary packaging directly on the floor."]) }),
+      Object.freeze({ heading: "Escalate problems", points: Object.freeze(["Stop work and notify a manager when you see pests, spills, damaged packaging, foreign material, unusual odor, mold, or unsafe equipment.", "Do not release quarantined or rejected stock without written authorization."]) })
+    ]),
+    question: "What is the correct response when a product-contact surface becomes contaminated?",
+    options: Object.freeze([
+      Object.freeze({ id: "finish_first", label: "Finish the batch, then clean" }),
+      Object.freeze({ id: "wipe_clothing", label: "Wipe it with work clothing" }),
+      Object.freeze({ id: "clean_as_you_go", label: "Stop, clean and sanitize it before continuing" })
+    ]),
+    correctAnswer: "clean_as_you_go"
+  }),
+  Object.freeze({
+    id: "ppe",
+    order: 3,
+    code: "PPE",
+    title: "Personal Protective Equipment",
+    duration: "8 minutes",
+    objective: "Select, inspect, wear, remove, and replace PPE correctly for the task and the posted warehouse rules.",
+    sections: Object.freeze([
+      Object.freeze({ heading: "Use task-specific PPE", points: Object.freeze(["Wear the hair restraint, clean protective clothing, gloves, eye protection, safety footwear, mask, or other PPE assigned in the Scope of Work or posted procedure.", "PPE reduces exposure but never replaces handwashing, training, guards, or safe work practices."]) }),
+      Object.freeze({ heading: "Inspect before use", points: Object.freeze(["Check PPE for holes, tears, contamination, poor fit, missing parts, or expired service life.", "Replace disposable gloves when torn, contaminated, or when changing activities; never wash disposable gloves for reuse."]) }),
+      Object.freeze({ heading: "Remove safely", points: Object.freeze(["Remove PPE without touching contaminated outer surfaces where possible.", "Discard single-use PPE in the assigned container and clean reusable PPE according to the posted procedure.", "Report missing or damaged PPE before starting the task."]) })
+    ]),
+    question: "What should you do before using assigned PPE?",
+    options: Object.freeze([
+      Object.freeze({ id: "inspect_before_use", label: "Inspect its condition and fit" }),
+      Object.freeze({ id: "share_without_cleaning", label: "Share it without cleaning" }),
+      Object.freeze({ id: "skip_handwashing", label: "Use it instead of washing hands" })
+    ]),
+    correctAnswer: "inspect_before_use"
+  }),
+  Object.freeze({
+    id: "customer_service",
+    order: 4,
+    code: "CST",
+    title: "Customer Service Training",
+    duration: "10 minutes",
+    objective: "Serve customers respectfully, protect their information, and resolve order or product concerns without making unsupported promises.",
+    sections: Object.freeze([
+      Object.freeze({ heading: "Listen and confirm", points: Object.freeze(["Greet the customer respectfully, listen without interrupting, and repeat the concern in plain language.", "Confirm the order number and only the minimum information needed to locate the order."]) }),
+      Object.freeze({ heading: "Resolve within authority", points: Object.freeze(["Explain the next step, owner, and expected follow-up time.", "Record the interaction accurately and escalate refunds, safety concerns, adverse reactions, legal threats, or matters outside your role.", "Never promise a medical outcome or invent product, shipping, or refund information."]) }),
+      Object.freeze({ heading: "Protect privacy", points: Object.freeze(["Use customer information only for assigned work and never share passwords, payment details, addresses, or order records through unauthorized channels.", "Do not request or store full payment-card numbers."]) })
+    ]),
+    question: "Which sequence best handles a customer concern?",
+    options: Object.freeze([
+      Object.freeze({ id: "argue_defend_close", label: "Argue, defend, and close the conversation" }),
+      Object.freeze({ id: "listen_confirm_resolve", label: "Listen, confirm, resolve or escalate, and document" }),
+      Object.freeze({ id: "promise_anything", label: "Promise anything needed to end the call" })
+    ]),
+    correctAnswer: "listen_confirm_resolve"
+  })
+]);
+
+export const publicOnboardingCatalog = () => STAFF_ONBOARDING_MODULES.map(({ correctAnswer, ...module }) => ({
+  ...module,
+  sections: module.sections.map((section) => ({ heading: section.heading, points: [...section.points] })),
+  options: module.options.map((option) => ({ ...option }))
+}));
+
+export const staffOnboardingRequired = (user) => Boolean(STAFF_ROLES[user?.role]?.requiresOnboarding);
 
 export class StaffValidationError extends Error {
   constructor(message, details = {}, code = "staff_validation_failed") {
@@ -126,6 +225,7 @@ export const roleCatalog = () => Object.values(STAFF_ROLES).map((role) => ({
   description: role.description,
   allowedLocations: [...role.allowedLocations],
   defaultLocations: [...role.defaultLocations],
+  requiresOnboarding: role.requiresOnboarding,
   permissions: [...role.permissions]
 }));
 
@@ -157,6 +257,9 @@ export const publicStaffUser = (user) => {
     managerId: user.managerId || "",
     profilePhotoUrl: user.profilePhoto?.id ? `/api/v1/staff/files/${encodeURIComponent(user.profilePhoto.id)}` : null,
     profileReady: Boolean(user.profilePhoto?.id && user.signature?.id),
+    onboardingRequired: Boolean(role?.requiresOnboarding),
+    onboardingStatus: role?.requiresOnboarding ? (user.onboarding?.status || "not_started") : "approved",
+    dashboardAccess: !role?.requiresOnboarding || user.onboarding?.status === "approved",
     status: user.status,
     lastLoginAt: user.lastLoginAt || null,
     invitedAt: user.invitedAt || null,
@@ -263,7 +366,8 @@ export const staffSessionCookie = (token, { secure = false, maxAge = 12 * 60 * 6
   `sr_staff_session=${encodeURIComponent(token)}`,
   "Path=/",
   "HttpOnly",
-  "SameSite=Lax",
+  "SameSite=Strict",
+  "Priority=High",
   `Max-Age=${maxAge}`,
   ...(secure ? ["Secure"] : [])
 ].join("; ");
@@ -272,7 +376,8 @@ export const clearStaffSessionCookie = ({ secure = false } = {}) => [
   "sr_staff_session=",
   "Path=/",
   "HttpOnly",
-  "SameSite=Lax",
+  "SameSite=Strict",
+  "Priority=High",
   "Max-Age=0",
   ...(secure ? ["Secure"] : [])
 ].join("; ");

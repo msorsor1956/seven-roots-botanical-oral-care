@@ -5,6 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <meta name="theme-color" content="#102b24">
   <meta name="robots" content="noindex, nofollow">
+  <meta name="referrer" content="no-referrer">
   <title>SEVEN ROOTS | Staff Operations</title>
   <link rel="icon" href="assets/seven-roots-mark.svg" type="image/svg+xml">
   <link rel="stylesheet" href="staff.css">
@@ -37,7 +38,28 @@
         <label><span>Work email</span><input name="email" type="email" autocomplete="username" required></label>
         <label><span>Password</span><input name="password" type="password" autocomplete="current-password" required></label>
         <button type="submit">Sign in</button>
+        <button class="access-link" type="button" data-show-temporary-password>Forgot your password?</button>
         <p class="access-status" data-login-status role="status" aria-live="polite"></p>
+      </form>
+
+      <form class="access-form" data-temporary-password-form hidden>
+        <div><p class="form-label">Staff password recovery</p><h2>Request one-time access</h2></div>
+        <p class="access-guidance">Enter the work email on your employee account. If it matches an active account, we will email a one-time temporary password.</p>
+        <label><span>Work email</span><input name="email" type="email" autocomplete="username" required></label>
+        <button type="submit">Email temporary password</button>
+        <button class="access-link" type="button" data-return-login>Return to sign in</button>
+        <p class="access-status" data-temporary-password-status role="status" aria-live="polite"></p>
+      </form>
+
+      <form class="access-form" data-password-change-form hidden>
+        <div><p class="form-label">Temporary access verified</p><h2>Create your private password</h2></div>
+        <p class="access-guidance">Before any staff information opens, replace the emailed password with one only you know.</p>
+        <label><span>New private password</span><input name="password" type="password" autocomplete="new-password" minlength="12" maxlength="128" required></label>
+        <label><span>Confirm private password</span><input name="confirmation" type="password" autocomplete="new-password" minlength="12" maxlength="128" required></label>
+        <small>Use at least 12 characters and do not reuse the temporary password, your email password, Stripe password, or Zoho password.</small>
+        <button type="submit">Save private password</button>
+        <button class="access-link" type="button" data-password-change-sign-out>Sign out instead</button>
+        <p class="access-status" data-password-change-status role="status" aria-live="polite"></p>
       </form>
 
       <form class="access-form" data-invite-form hidden>
@@ -49,6 +71,57 @@
         <button type="submit">Activate account</button>
         <p class="access-status" data-invite-status role="status" aria-live="polite"></p>
       </form>
+    </section>
+
+    <section class="onboarding" data-onboarding hidden>
+      <div class="onboarding-heading">
+        <div>
+          <p class="kicker">Required before dashboard access</p>
+          <h1>Safe work starts here.</h1>
+          <p>Complete all four lessons, pass each knowledge check, upload your employee photo and signature, then sign and date the acknowledgment for management review.</p>
+        </div>
+        <div class="onboarding-identity">
+          <span data-onboarding-employee>Employee onboarding</span>
+          <b data-onboarding-status>Not started</b>
+          <small data-onboarding-progress>0 of 4 modules complete</small>
+        </div>
+      </div>
+
+      <div class="onboarding-layout">
+        <aside class="training-rail" aria-label="Onboarding modules">
+          <div class="training-progress" aria-hidden="true"><span data-training-progress-bar></span></div>
+          <nav data-training-module-list></nav>
+          <div class="training-control-note">
+            <strong>Dashboard locked</strong>
+            <p>Operational data remains unavailable until management signs the completed record.</p>
+          </div>
+        </aside>
+
+        <div class="training-stage">
+          <article class="training-lesson" data-training-lesson></article>
+          <section class="onboarding-submit" data-onboarding-submit>
+            <div class="submission-heading">
+              <p class="kicker">Employee acknowledgment</p>
+              <h2>Identify, sign and submit</h2>
+              <p>Your photo and signature become part of the training record sent to management.</p>
+            </div>
+            <form data-onboarding-form>
+              <label><span>Employee photo</span><input name="profilePhoto" type="file" accept="image/jpeg,image/png,image/webp,image/heic,image/heif"></label>
+              <label><span>Employee signature</span><input name="signature" type="file" accept="image/jpeg,image/png,image/webp"></label>
+              <div class="onboarding-proof">
+                <figure><span>Employee</span><img data-onboarding-photo alt="Your employee profile" hidden><small data-onboarding-photo-empty>Photo required</small></figure>
+                <figure><span>Signature</span><img data-onboarding-signature alt="Your signature" hidden><small data-onboarding-signature-empty>Signature required</small></figure>
+              </div>
+              <label><span>Type your full employee name</span><input name="signedName" maxlength="120" autocomplete="name" required></label>
+              <label><span>Date signed</span><input name="signedDate" type="date" required></label>
+              <fieldset class="onboarding-acknowledgments" data-onboarding-acknowledgments><legend>Required acknowledgments</legend></fieldset>
+              <button type="submit" data-onboarding-submit-button>Send to management for review</button>
+            </form>
+          </section>
+          <section class="onboarding-review-state" data-onboarding-review-state hidden></section>
+          <p class="onboarding-status" data-onboarding-message role="status" aria-live="polite"></p>
+        </div>
+      </div>
     </section>
 
     <section class="operations" data-operations hidden>
@@ -65,6 +138,7 @@
         <article><span>Orders to fulfill</span><b data-metric="ordersToFulfill">0</b></article>
         <article><span>Counts pending</span><b data-metric="pendingCounts">0</b></article>
         <article><span>Low stock</span><b data-metric="lowStock">0</b></article>
+        <article><span>Pending onboarding</span><b data-metric="pendingOnboarding">0</b></article>
       </section>
 
       <nav class="workspace-nav" aria-label="Staff workspace" data-workspace-nav>
@@ -74,6 +148,7 @@
         <button type="button" data-view="orders">Orders</button>
         <button type="button" data-view="finance">Finance</button>
         <button type="button" data-view="contacts">Contacts</button>
+        <button type="button" data-view="onboarding">Onboarding review</button>
         <button type="button" data-view="profile">My profile</button>
         <button type="button" data-view="audit">Audit</button>
       </nav>
@@ -132,6 +207,11 @@
         <div class="contact-list" data-contact-list><p class="empty">Loading employee contacts...</p></div>
       </section>
 
+      <section class="workspace-view" data-workspace-view="onboarding" hidden>
+        <div class="view-heading"><div><h2>Employee onboarding review</h2><p>Review completed lessons, signed acknowledgment, employee photo, and signature. Approval opens the employee's dashboard; returned records remain locked until resubmitted.</p></div></div>
+        <div class="onboarding-review-list" data-onboarding-review-list><p class="empty">No onboarding submissions are waiting.</p></div>
+      </section>
+
       <section class="workspace-view" data-workspace-view="profile" hidden>
         <div class="view-heading"><div><h2>My contact and approval profile</h2><p>Managers must upload a clear profile photo and signature before approving completed work. Use an international WhatsApp number beginning with +.</p></div></div>
         <form class="profile-form" data-profile-form>
@@ -143,6 +223,7 @@
           <div class="profile-proof"><figure><span>Photo</span><img data-profile-photo alt="Your staff profile" hidden><small data-profile-photo-empty>Not uploaded</small></figure><figure><span>Approval signature</span><img data-profile-signature alt="Your approval signature" hidden><small data-profile-signature-empty>Not uploaded</small></figure></div>
           <button type="submit">Save profile</button>
         </form>
+        <section class="onboarding-certificate" data-onboarding-certificate hidden></section>
       </section>
 
       <section class="workspace-view" data-workspace-view="audit" hidden>

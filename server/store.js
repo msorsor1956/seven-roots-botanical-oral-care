@@ -3,8 +3,10 @@ import path from "node:path";
 import { randomUUID } from "node:crypto";
 import { formats } from "./catalog.js";
 import {
+  STAFF_ONBOARDING_MODULES,
   STAFF_ROLES,
   StaffAccessError,
+  StaffValidationError,
   canAccessStaffLocation,
   cleanStaffEmail,
   cleanStaffText,
@@ -12,13 +14,16 @@ import {
   hashOpaqueToken,
   hashStaffPassword,
   hasStaffPermission,
+  publicOnboardingCatalog,
   publicStaffUser,
+  staffOnboardingRequired,
   staffLocations,
+  validateStaffPassword,
   validateStaffUserInput,
   verifyStaffPassword
 } from "./staff.js";
 
-const DATA_VERSION = 7;
+const DATA_VERSION = 9;
 const MAX_STORED_EVENTS = 2000;
 const MAX_STORED_RESERVATIONS = 5000;
 const MAX_ZOHO_QUEUE = 5000;
@@ -29,9 +34,12 @@ const MAX_STOCK_COUNTS = 5000;
 const MAX_TRANSFERS = 2500;
 const RESERVATION_MAX_AGE_MS = 31 * 60 * 60 * 1000;
 const STAFF_INVITE_MAX_AGE_MS = 72 * 60 * 60 * 1000;
+const STAFF_TEMPORARY_PASSWORD_MAX_AGE_MS = 30 * 60 * 1000;
+const STAFF_TEMPORARY_PASSWORD_COOLDOWN_MS = 5 * 60 * 1000;
 const STAFF_SESSION_MAX_AGE_MS = 12 * 60 * 60 * 1000;
 const STAFF_LOCK_MAX_AGE_MS = 15 * 60 * 1000;
 const paidStatuses = new Set(["paid", "partially_refunded", "refunded"]);
+const ONBOARDING_ACKNOWLEDGMENTS = Object.freeze(["truthful", "safety", "policy"]);
 
 const emptyData = () => ({
   version: DATA_VERSION,
@@ -70,6 +78,58 @@ const stringId = (value) => typeof value === "string" ? value : value?.id || "";
 const safeQuantity = (value) => Math.max(1, Math.min(Number.parseInt(value, 10) || 1, 10));
 const stripeDate = (value) => Number.isFinite(value) ? new Date(value * 1000).toISOString() : new Date().toISOString();
 const isCents = (value) => Number.isInteger(value) && value >= 0;
+const initialOnboarding = (role) => ({
+  status: STAFF_ROLES[role]?.requiresOnboarding ? "not_started" : "approved",
+  modules: {},
+  startedAt: null,
+  submittedAt: null,
+  signedName: "",
+  signedDate: "",
+  signedAt: null,
+  acknowledgments: [],
+  employeePhoto: null,
+  employeeSignature: null,
+  review: null,
+  reviewHistory: [],
+  updatedAt: null
+});
+
+const onboardingFileUrl = (file) => file?.id ? `/api/v1/staff/files/${encodeURIComponent(file.id)}` : null;
+
+const publicOnboardingReview = (review) => review ? {
+  decision: review.decision,
+  note: review.note || "",
+  reviewedBy: review.reviewedBy,
+  reviewedByName: review.reviewedByName,
+  reviewedAt: review.reviewedAt,
+  managerPhotoUrl: onboardingFileUrl(review.managerPhoto),
+  managerSignatureUrl: onboardingFileUrl(review.managerSignature)
+} : null;
+
+const publicOnboardingRecord = (user) => {
+  const onboarding = user.onboarding || initialOnboarding(user.role);
+  const completedIds = Object.entries(onboarding.modules || {})
+    .filter(([, progress]) => Boolean(progress?.completedAt))
+    .map(([moduleId]) => moduleId);
+  return {
+    user: publicStaffUser(user),
+    status: staffOnboardingRequired(user) ? onboarding.status : "approved",
+    dashboardAccess: !staffOnboardingRequired(user) || onboarding.status === "approved",
+    completedModuleIds: completedIds,
+    completedModules: completedIds.length,
+    totalModules: STAFF_ONBOARDING_MODULES.length,
+    startedAt: onboarding.startedAt || null,
+    submittedAt: onboarding.submittedAt || null,
+    signedName: onboarding.signedName || "",
+    signedDate: onboarding.signedDate || "",
+    signedAt: onboarding.signedAt || null,
+    acknowledgments: [...(onboarding.acknowledgments || [])],
+    employeePhotoUrl: onboardingFileUrl(onboarding.employeePhoto),
+    employeeSignatureUrl: onboardingFileUrl(onboarding.employeeSignature),
+    review: publicOnboardingReview(onboarding.review),
+    reviewHistory: (onboarding.reviewHistory || []).map(publicOnboardingReview)
+  };
+};
 
 const checkoutStatus = (eventType, session) => {
   if (eventType === "checkout.session.async_payment_failed") return "payment_failed";
@@ -299,6 +359,29 @@ export class JsonStore {
       if (!Object.hasOwn(user, "jobTitle")) user.jobTitle = "";
       if (!Object.hasOwn(user, "profilePhoto")) user.profilePhoto = null;
       if (!Object.hasOwn(user, "signature")) user.signature = null;
+      if (!Object.hasOwn(user, "temporaryPasswordId")) user.temporaryPasswordId = "";
+      if (!Object.hasOwn(user, "temporaryPasswordHash")) user.temporaryPasswordHash = "";
+      if (!Object.hasOwn(user, "temporaryPasswordIssuedAt")) user.temporaryPasswordIssuedAt = null;
+      if (!Object.hasOwn(user, "temporaryPasswordExpiresAt")) user.temporaryPasswordExpiresAt = null;
+      if (!Object.hasOwn(user, "temporaryPasswordUsedAt")) user.temporaryPasswordUsedAt = null;
+      if (!Object.hasOwn(user, "temporaryPasswordDeliveryStatus")) user.temporaryPasswordDeliveryStatus = "";
+      if (!Object.hasOwn(user, "temporaryPasswordDeliveryAttemptedAt")) user.temporaryPasswordDeliveryAttemptedAt = null;
+      if (!Object.hasOwn(user, "temporaryPasswordDeliveryMessageId")) user.temporaryPasswordDeliveryMessageId = "";
+      if (!Object.hasOwn(user, "temporaryPasswordDeliveryError")) user.temporaryPasswordDeliveryError = "";
+      if (!user.onboarding || typeof user.onboarding !== "object") {
+        user.onboarding = initialOnboarding(user.role);
+        needsPersist = true;
+      } else {
+        const defaults = initialOnboarding(user.role);
+        user.onboarding = { ...defaults, ...user.onboarding };
+        if (!user.onboarding.modules || typeof user.onboarding.modules !== "object") user.onboarding.modules = {};
+        if (!Array.isArray(user.onboarding.acknowledgments)) user.onboarding.acknowledgments = [];
+        if (!Array.isArray(user.onboarding.reviewHistory)) user.onboarding.reviewHistory = [];
+        if (!staffOnboardingRequired(user) && user.onboarding.status !== "approved") {
+          user.onboarding.status = "approved";
+          needsPersist = true;
+        }
+      }
     }
 
     for (const task of this.data.staffTasks) {
@@ -1075,8 +1158,18 @@ export class JsonStore {
       managerId: value.managerId,
       profilePhoto: null,
       signature: null,
+      onboarding: initialOnboarding(value.role),
       status: "invited",
       passwordHash: "",
+      temporaryPasswordId: "",
+      temporaryPasswordHash: "",
+      temporaryPasswordIssuedAt: null,
+      temporaryPasswordExpiresAt: null,
+      temporaryPasswordUsedAt: null,
+      temporaryPasswordDeliveryStatus: "",
+      temporaryPasswordDeliveryAttemptedAt: null,
+      temporaryPasswordDeliveryMessageId: "",
+      temporaryPasswordDeliveryError: "",
       failedLoginCount: 0,
       lockedUntil: null,
       lastLoginAt: null,
@@ -1137,6 +1230,7 @@ export class JsonStore {
       if (!otherOwner) throw new StaffAccessError("At least one active owner account is required.", "owner_required", 409);
     }
     const previous = publicStaffUser(user);
+    const previousRole = user.role;
     Object.assign(user, {
       name: value.name,
       email: value.email,
@@ -1150,7 +1244,17 @@ export class JsonStore {
       status: value.status || user.status,
       updatedAt: new Date().toISOString()
     });
+    if (!staffOnboardingRequired(user)) {
+      user.onboarding = { ...(user.onboarding || initialOnboarding(user.role)), status: "approved", updatedAt: user.updatedAt };
+    } else if (!STAFF_ROLES[previousRole]?.requiresOnboarding) {
+      user.onboarding = { ...initialOnboarding(user.role), updatedAt: user.updatedAt };
+    }
     if (user.status === "active" && !user.passwordHash) user.status = "invited";
+    if (previous.email !== user.email || user.status === "inactive") {
+      user.temporaryPasswordHash = "";
+      user.temporaryPasswordExpiresAt = null;
+      user.temporaryPasswordUsedAt = user.updatedAt;
+    }
     if (user.status === "inactive") {
       for (const session of this.data.staffSessions) {
         if (session.userId === user.id && !session.revokedAt) session.revokedAt = user.updatedAt;
@@ -1165,7 +1269,7 @@ export class JsonStore {
     return publicStaffUser(user);
   }
 
-  #createStaffSession(user, now = new Date()) {
+  #createStaffSession(user, now = new Date(), { passwordChangeRequired = false } = {}) {
     const token = createOpaqueToken();
     const csrfToken = createOpaqueToken();
     const createdAt = now.toISOString();
@@ -1175,6 +1279,7 @@ export class JsonStore {
       userId: user.id,
       tokenHash: hashOpaqueToken(token),
       csrfToken,
+      passwordChangeRequired: Boolean(passwordChangeRequired),
       createdAt,
       lastSeenAt: createdAt,
       expiresAt,
@@ -1182,7 +1287,12 @@ export class JsonStore {
     };
     this.data.staffSessions.unshift(session);
     this.data.staffSessions = this.data.staffSessions.slice(0, MAX_STAFF_SESSIONS);
-    return { token, csrfToken, expiresAt, user: publicStaffUser(user) };
+    return {
+      token,
+      csrfToken,
+      expiresAt,
+      user: { ...publicStaffUser(user), passwordChangeRequired: Boolean(passwordChangeRequired) }
+    };
   }
 
   async acceptStaffInvitation(token, password) {
@@ -1197,6 +1307,9 @@ export class JsonStore {
     user.status = "active";
     user.failedLoginCount = 0;
     user.lockedUntil = null;
+    user.temporaryPasswordHash = "";
+    user.temporaryPasswordExpiresAt = null;
+    user.temporaryPasswordUsedAt = now.toISOString();
     user.acceptedAt = now.toISOString();
     user.updatedAt = now.toISOString();
     invitation.usedAt = now.toISOString();
@@ -1207,6 +1320,104 @@ export class JsonStore {
     this.#addAudit(user, "staff.invitation_accepted", "staff_user", user.id, {
       location: user.locations.join(","),
       summary: `${user.name} activated their staff account.`
+    });
+    await this.persist();
+    return login;
+  }
+
+  async issueStaffTemporaryPassword(email, temporaryPassword) {
+    const normalizedEmail = cleanStaffEmail(email);
+    const user = this.data.staffUsers.find((item) => item.email === normalizedEmail);
+    const now = new Date();
+    const recentlySent = ["pending", "sent"].includes(user?.temporaryPasswordDeliveryStatus)
+      && now.valueOf() - new Date(user.temporaryPasswordIssuedAt).valueOf() < STAFF_TEMPORARY_PASSWORD_COOLDOWN_MS;
+    if (!user || user.status !== "active" || !user.passwordHash || recentlySent) {
+      await hashStaffPassword(temporaryPassword);
+      return null;
+    }
+    const id = randomUUID();
+    const issuedAt = now.toISOString();
+    const expiresAt = new Date(now.valueOf() + STAFF_TEMPORARY_PASSWORD_MAX_AGE_MS).toISOString();
+    user.temporaryPasswordId = id;
+    user.temporaryPasswordHash = await hashStaffPassword(temporaryPassword);
+    user.temporaryPasswordIssuedAt = issuedAt;
+    user.temporaryPasswordExpiresAt = expiresAt;
+    user.temporaryPasswordUsedAt = null;
+    user.temporaryPasswordDeliveryStatus = "pending";
+    user.temporaryPasswordDeliveryAttemptedAt = null;
+    user.temporaryPasswordDeliveryMessageId = "";
+    user.temporaryPasswordDeliveryError = "";
+    user.updatedAt = issuedAt;
+    this.#addAudit({ id: "password-recovery", name: "Password recovery", role: "system" }, "staff.temporary_password_requested", "staff_user", user.id, {
+      location: user.locations.join(","),
+      summary: `A temporary password was requested for ${user.name}.`
+    });
+    await this.persist();
+    return {
+      user: publicStaffUser(user),
+      temporaryPassword: { id, issuedAt, expiresAt }
+    };
+  }
+
+  async recordStaffTemporaryPasswordDelivery(temporaryPasswordId, outcome) {
+    const user = this.data.staffUsers.find((item) => item.temporaryPasswordId === temporaryPasswordId);
+    if (!user) return null;
+    const attemptedAt = cleanStaffText(outcome?.attemptedAt, 40) || new Date().toISOString();
+    const status = outcome?.status === "sent" ? "sent" : "failed";
+    user.temporaryPasswordDeliveryStatus = status;
+    user.temporaryPasswordDeliveryAttemptedAt = attemptedAt;
+    user.temporaryPasswordDeliveryMessageId = cleanStaffText(outcome?.messageId, 160);
+    user.temporaryPasswordDeliveryError = status === "sent" ? "" : cleanStaffText(outcome?.error, 240);
+    if (status === "sent") {
+      user.failedLoginCount = 0;
+      user.lockedUntil = null;
+    } else {
+      user.temporaryPasswordHash = "";
+      user.temporaryPasswordExpiresAt = null;
+    }
+    user.updatedAt = attemptedAt;
+    this.#addAudit({ id: "password-recovery", name: "Password recovery", role: "system" }, `staff.temporary_password_${status}`, "staff_user", user.id, {
+      location: user.locations.join(","),
+      summary: status === "sent"
+        ? `A one-time temporary password was emailed to ${user.name}.`
+        : `The temporary password email for ${user.name} was not delivered.`,
+      metadata: {
+        provider: cleanStaffText(outcome?.provider, 40),
+        messageId: user.temporaryPasswordDeliveryMessageId
+      }
+    });
+    await this.persist();
+    return { status, attemptedAt, expiresAt: user.temporaryPasswordExpiresAt };
+  }
+
+  async changeTemporaryStaffPassword(userId, sessionId, value) {
+    const user = this.data.staffUsers.find((item) => item.id === userId && item.status === "active");
+    const session = this.data.staffSessions.find((item) => item.id === sessionId && item.userId === userId && !item.revokedAt);
+    if (!user || !session || !session.passwordChangeRequired) {
+      throw new StaffAccessError("A temporary-password session is required.", "password_change_not_required", 409);
+    }
+    const password = validateStaffPassword(value);
+    if (await verifyStaffPassword(password, user.passwordHash)
+      || await verifyStaffPassword(password, user.temporaryPasswordHash)) {
+      throw new StaffValidationError("Choose a password you have not used for this account.", {
+        password: "Your private password must be different from the temporary or current password."
+      }, "password_reused");
+    }
+    const now = new Date();
+    user.passwordHash = await hashStaffPassword(password);
+    user.temporaryPasswordHash = "";
+    user.temporaryPasswordExpiresAt = null;
+    user.temporaryPasswordUsedAt = now.toISOString();
+    user.failedLoginCount = 0;
+    user.lockedUntil = null;
+    user.updatedAt = now.toISOString();
+    for (const existing of this.data.staffSessions) {
+      if (existing.userId === user.id && !existing.revokedAt) existing.revokedAt = now.toISOString();
+    }
+    const login = this.#createStaffSession(user, now);
+    this.#addAudit(user, "staff.password_changed", "staff_user", user.id, {
+      location: user.locations.join(","),
+      summary: `${user.name} replaced a one-time temporary password with a private password.`
     });
     await this.persist();
     return login;
@@ -1226,8 +1437,17 @@ export class JsonStore {
     if (user.lockedUntil && new Date(user.lockedUntil).valueOf() > now.valueOf()) {
       throw new StaffAccessError("This account is temporarily locked. Try again later.", "staff_account_locked", 429);
     }
-    const valid = await verifyStaffPassword(password, user.passwordHash);
-    if (!valid) {
+    const validPermanentPassword = await verifyStaffPassword(password, user.passwordHash);
+    const temporaryPasswordActive = Boolean(
+      user.temporaryPasswordHash
+      && !user.temporaryPasswordUsedAt
+      && new Date(user.temporaryPasswordExpiresAt).valueOf() > now.valueOf()
+      && user.temporaryPasswordDeliveryStatus === "sent"
+    );
+    const validTemporaryPassword = !validPermanentPassword && temporaryPasswordActive
+      ? await verifyStaffPassword(password, user.temporaryPasswordHash)
+      : false;
+    if (!validPermanentPassword && !validTemporaryPassword) {
       user.failedLoginCount = (Number(user.failedLoginCount) || 0) + 1;
       if (user.failedLoginCount >= 5) user.lockedUntil = new Date(now.valueOf() + STAFF_LOCK_MAX_AGE_MS).toISOString();
       user.updatedAt = now.toISOString();
@@ -1238,10 +1458,22 @@ export class JsonStore {
     user.lockedUntil = null;
     user.lastLoginAt = now.toISOString();
     user.updatedAt = now.toISOString();
-    const login = this.#createStaffSession(user, now);
-    this.#addAudit(user, "staff.login", "staff_session", login.user.id, {
+    if (validTemporaryPassword) {
+      user.temporaryPasswordUsedAt = now.toISOString();
+      for (const session of this.data.staffSessions) {
+        if (session.userId === user.id && !session.revokedAt) session.revokedAt = now.toISOString();
+      }
+    } else if (user.temporaryPasswordHash) {
+      user.temporaryPasswordHash = "";
+      user.temporaryPasswordExpiresAt = null;
+      user.temporaryPasswordUsedAt = now.toISOString();
+    }
+    const login = this.#createStaffSession(user, now, { passwordChangeRequired: validTemporaryPassword });
+    this.#addAudit(user, validTemporaryPassword ? "staff.temporary_password_used" : "staff.login", "staff_session", login.user.id, {
       location: user.locations.join(","),
-      summary: `${user.name} signed in.`
+      summary: validTemporaryPassword
+        ? `${user.name} used a one-time temporary password and must create a private password.`
+        : `${user.name} signed in.`
     });
     await this.persist();
     return login;
@@ -1258,7 +1490,11 @@ export class JsonStore {
       session.lastSeenAt = new Date().toISOString();
       await this.persist();
     }
-    return { session, user, publicUser: publicStaffUser(user) };
+    return {
+      session,
+      user,
+      publicUser: { ...publicStaffUser(user), passwordChangeRequired: Boolean(session.passwordChangeRequired) }
+    };
   }
 
   async endStaffSession(token) {
@@ -1546,6 +1782,181 @@ export class JsonStore {
       .sort((left, right) => left.name.localeCompare(right.name));
   }
 
+  staffDashboardAccess(actor) {
+    return Boolean(actor && (!staffOnboardingRequired(actor) || actor.onboarding?.status === "approved"));
+  }
+
+  staffOnboarding(actor) {
+    const record = publicOnboardingRecord(actor);
+    return {
+      ...record,
+      currentEmployeePhotoUrl: actor.profilePhoto?.id ? `/api/v1/staff/files/${encodeURIComponent(actor.profilePhoto.id)}` : null,
+      currentEmployeeSignatureUrl: actor.signature?.id ? `/api/v1/staff/files/${encodeURIComponent(actor.signature.id)}` : null,
+      catalog: publicOnboardingCatalog(),
+      requiredAcknowledgments: [
+        { id: "truthful", label: "I completed this training myself and the information I submitted is accurate." },
+        { id: "safety", label: "I will stop work and notify management when a condition may be unsafe or may contaminate product." },
+        { id: "policy", label: "I understand that training does not replace the current Scope of Work, posted procedure, or manager instruction." }
+      ]
+    };
+  }
+
+  async completeStaffOnboardingModule(actor, moduleId, input) {
+    if (!staffOnboardingRequired(actor)) return this.staffOnboarding(actor);
+    const user = this.data.staffUsers.find((item) => item.id === actor.id);
+    if (!user) throw new StaffAccessError("Employee not found.", "staff_not_found", 404);
+    if (["pending_review", "approved"].includes(user.onboarding?.status)) {
+      throw new StaffAccessError("Training is locked while management review is pending or completed.", "onboarding_locked", 409);
+    }
+    const module = STAFF_ONBOARDING_MODULES.find((item) => item.id === cleanStaffText(moduleId, 60).toLowerCase());
+    if (!module) throw new StaffAccessError("Training module not found.", "onboarding_module_not_found", 404);
+    const answer = cleanStaffText(input?.answer, 80).toLowerCase();
+    if (answer !== module.correctAnswer) {
+      throw new StaffAccessError("Review the lesson and choose the correct answer before completing this module.", "onboarding_answer_incorrect", 422);
+    }
+    const now = new Date().toISOString();
+    user.onboarding ||= initialOnboarding(user.role);
+    user.onboarding.modules ||= {};
+    user.onboarding.modules[module.id] = { completedAt: now, answer };
+    user.onboarding.startedAt ||= now;
+    user.onboarding.status = "in_progress";
+    user.onboarding.updatedAt = now;
+    user.updatedAt = now;
+    this.#addAudit(actor, "onboarding.module_completed", "staff_user", user.id, {
+      location: user.locations.join(","),
+      summary: `${user.name} completed ${module.title}.`,
+      metadata: { moduleId: module.id, moduleTitle: module.title }
+    });
+    await this.persist();
+    return this.staffOnboarding(user);
+  }
+
+  async submitStaffOnboarding(actor, input) {
+    if (!staffOnboardingRequired(actor)) return this.staffOnboarding(actor);
+    const user = this.data.staffUsers.find((item) => item.id === actor.id);
+    if (!user) throw new StaffAccessError("Employee not found.", "staff_not_found", 404);
+    if (user.onboarding?.status === "approved") throw new StaffAccessError("Your onboarding is already approved.", "onboarding_approved", 409);
+    if (user.onboarding?.status === "pending_review") throw new StaffAccessError("Your onboarding is already awaiting management review.", "onboarding_pending_review", 409);
+    const completed = new Set(Object.entries(user.onboarding?.modules || {})
+      .filter(([, progress]) => Boolean(progress?.completedAt))
+      .map(([id]) => id));
+    const missingModules = STAFF_ONBOARDING_MODULES.filter((module) => !completed.has(module.id)).map((module) => module.title);
+    if (missingModules.length) {
+      throw new StaffAccessError(`Complete all training modules before signing: ${missingModules.join(", ")}.`, "onboarding_modules_required", 409);
+    }
+    if (!user.profilePhoto?.id || !user.signature?.id) {
+      throw new StaffAccessError("Upload your employee photo and signature before submitting onboarding.", "onboarding_identity_required", 409);
+    }
+    const signedName = cleanStaffText(input?.signedName, 120);
+    const normalizeName = (value) => cleanStaffText(value, 120).toLocaleLowerCase().replace(/[^\p{L}\p{N}]+/gu, "");
+    if (!signedName || normalizeName(signedName) !== normalizeName(user.name)) {
+      throw new StaffAccessError("Type your full employee name exactly as shown on your account.", "onboarding_signature_name_mismatch", 422);
+    }
+    const signedDate = cleanStaffText(input?.signedDate, 10);
+    if (!/^\d{4}-\d{2}-\d{2}$/u.test(signedDate)) {
+      throw new StaffAccessError("Enter the date you signed the training acknowledgment.", "onboarding_signed_date_required", 422);
+    }
+    const signedDateValue = new Date(`${signedDate}T12:00:00.000Z`).valueOf();
+    if (!Number.isFinite(signedDateValue) || Math.abs(Date.now() - signedDateValue) > 36 * 60 * 60 * 1000) {
+      throw new StaffAccessError("The signed date must be today's date.", "onboarding_signed_date_invalid", 422);
+    }
+    const acknowledgments = [...new Set((Array.isArray(input?.acknowledgments) ? input.acknowledgments : [])
+      .map((value) => cleanStaffText(value, 40).toLowerCase()))];
+    const missingAcknowledgments = ONBOARDING_ACKNOWLEDGMENTS.filter((id) => !acknowledgments.includes(id));
+    if (missingAcknowledgments.length) {
+      throw new StaffAccessError("Accept every onboarding acknowledgment before submitting.", "onboarding_acknowledgments_required", 422);
+    }
+    const now = new Date().toISOString();
+    Object.assign(user.onboarding, {
+      status: "pending_review",
+      submittedAt: now,
+      signedName,
+      signedDate,
+      signedAt: now,
+      acknowledgments: [...ONBOARDING_ACKNOWLEDGMENTS],
+      employeePhoto: { ...user.profilePhoto },
+      employeeSignature: { ...user.signature },
+      updatedAt: now
+    });
+    user.updatedAt = now;
+    this.#addAudit(actor, "onboarding.submitted", "staff_user", user.id, {
+      location: user.locations.join(","),
+      summary: `${user.name} submitted onboarding for management review.`,
+      metadata: { signedDate, modulesCompleted: completed.size, managerId: user.managerId || "" }
+    });
+    await this.persist();
+    return this.staffOnboarding(user);
+  }
+
+  #canReviewOnboarding(actor, employee) {
+    if (!hasStaffPermission(actor, "onboarding.review") || actor.id === employee.id) return false;
+    if (actor.role === "owner") return true;
+    const sharedLocation = staffLocations(employee).some((location) => canAccessStaffLocation(actor, location));
+    return sharedLocation && (!employee.managerId || employee.managerId === actor.id);
+  }
+
+  staffOnboardingReviews(actor) {
+    if (!hasStaffPermission(actor, "onboarding.review")) return [];
+    const statusOrder = { pending_review: 0, changes_requested: 1, approved: 2 };
+    return this.data.staffUsers
+      .filter((employee) => staffOnboardingRequired(employee) && this.#canReviewOnboarding(actor, employee))
+      .filter((employee) => ["pending_review", "changes_requested", "approved"].includes(employee.onboarding?.status))
+      .map(publicOnboardingRecord)
+      .sort((left, right) => {
+        const statusDifference = (statusOrder[left.status] ?? 9) - (statusOrder[right.status] ?? 9);
+        if (statusDifference) return statusDifference;
+        return String(right.submittedAt || "").localeCompare(String(left.submittedAt || ""));
+      });
+  }
+
+  async reviewStaffOnboarding(actor, employeeId, input) {
+    if (!hasStaffPermission(actor, "onboarding.review")) throw new StaffAccessError("You cannot review employee onboarding.");
+    const employee = this.data.staffUsers.find((item) => item.id === employeeId);
+    if (!employee || !staffOnboardingRequired(employee) || !this.#canReviewOnboarding(actor, employee)) {
+      throw new StaffAccessError("Onboarding submission not found.", "onboarding_not_found", 404);
+    }
+    if (employee.onboarding?.status !== "pending_review") {
+      throw new StaffAccessError("Only a pending onboarding submission can be reviewed.", "onboarding_not_pending", 409);
+    }
+    const reviewer = this.data.staffUsers.find((item) => item.id === actor.id);
+    if (!reviewer?.profilePhoto?.id || !reviewer?.signature?.id) {
+      throw new StaffAccessError("Upload your manager photo and signature before approving onboarding.", "manager_identity_required", 409);
+    }
+    const decision = cleanStaffText(input?.decision, 30).toLowerCase();
+    if (!["approve", "request_changes"].includes(decision)) {
+      throw new StaffAccessError("Choose approve or request changes.", "invalid_onboarding_decision", 422);
+    }
+    const note = cleanStaffText(input?.reviewNote, 1200);
+    if (decision === "request_changes" && note.length < 5) {
+      throw new StaffAccessError("Explain what the employee must correct.", "onboarding_review_note_required", 422);
+    }
+    const now = new Date().toISOString();
+    const review = {
+      decision: decision === "approve" ? "approved" : "changes_requested",
+      note,
+      reviewedBy: reviewer.id,
+      reviewedByName: reviewer.name,
+      reviewedAt: now,
+      managerPhoto: { ...reviewer.profilePhoto },
+      managerSignature: { ...reviewer.signature }
+    };
+    employee.onboarding.reviewHistory ||= [];
+    employee.onboarding.reviewHistory.unshift(review);
+    employee.onboarding.review = review;
+    employee.onboarding.status = review.decision;
+    employee.onboarding.updatedAt = now;
+    employee.updatedAt = now;
+    this.#addAudit(actor, `onboarding.${review.decision}`, "staff_user", employee.id, {
+      location: employee.locations.join(","),
+      summary: review.decision === "approved"
+        ? `${reviewer.name} approved ${employee.name}'s onboarding and opened dashboard access.`
+        : `${reviewer.name} returned ${employee.name}'s onboarding for changes.`,
+      metadata: { employeeId: employee.id, decision: review.decision }
+    });
+    await this.persist();
+    return publicOnboardingRecord(employee);
+  }
+
   async updateOwnStaffProfile(actor, input) {
     if (!hasStaffPermission(actor, "profile.update")) throw new StaffAccessError("You cannot update this staff profile.");
     const user = this.data.staffUsers.find((item) => item.id === actor.id);
@@ -1729,8 +2140,16 @@ export class JsonStore {
       if (task.approval?.approverSignature?.id === fileId) return task.approval.approverSignature;
     }
     for (const user of this.data.staffUsers) {
+      const onboardingVisible = user.id === actor.id || this.#canReviewOnboarding(actor, user);
       if (user.profilePhoto?.id === fileId && hasStaffPermission(actor, "directory.view")) return user.profilePhoto;
       if (user.id === actor.id && user.signature?.id === fileId) return user.signature;
+      if (onboardingVisible && user.onboarding?.employeePhoto?.id === fileId) return user.onboarding.employeePhoto;
+      if (onboardingVisible && user.onboarding?.employeeSignature?.id === fileId) return user.onboarding.employeeSignature;
+      for (const review of user.onboarding?.reviewHistory || []) {
+        if (!(onboardingVisible || review.reviewedBy === actor.id)) continue;
+        if (review.managerPhoto?.id === fileId) return review.managerPhoto;
+        if (review.managerSignature?.id === fileId) return review.managerSignature;
+      }
     }
     throw new StaffAccessError("Work file not found.", "work_file_not_found", 404);
   }
@@ -2051,11 +2470,13 @@ export class JsonStore {
     const stockCounts = this.staffStockCounts(actor);
     const orders = this.staffOrders(actor);
     const publicUser = publicStaffUser(actor);
+    const onboardingReviews = this.staffOnboardingReviews(actor);
     return {
       user: {
         ...publicUser,
         signatureUrl: actor.signature?.id ? `/api/v1/staff/files/${encodeURIComponent(actor.signature.id)}` : null
       },
+      onboarding: publicOnboardingRecord(actor),
       summary: {
         openTasks: tasks.filter((task) => task.status !== "completed").length,
         pendingApprovals: tasks.filter((task) => task.status === "pending_approval").length,
@@ -2063,9 +2484,11 @@ export class JsonStore {
         activeTransfers: transfers.filter((transfer) => !["received", "cancelled"].includes(transfer.status)).length,
         pendingCounts: stockCounts.filter((count) => ["submitted", "approved_pending_zoho"].includes(count.status)).length,
         ordersToFulfill: orders.filter((order) => !["delivered", "returned"].includes(order.fulfillmentStatus)).length,
-        lowStock: inventory.filter((item) => ["low_stock", "sold_out"].includes(item.status)).length
+        lowStock: inventory.filter((item) => ["low_stock", "sold_out"].includes(item.status)).length,
+        pendingOnboarding: onboardingReviews.filter((record) => record.status === "pending_review").length
       },
       tasks,
+      onboardingReviews,
       directory: this.staffDirectory(actor),
       transfers,
       inventory,

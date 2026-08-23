@@ -37,7 +37,8 @@ The Railway deployment serves the frontend and API from one Node process. The Gi
 - Atomic private JSON storage with restrictive file permissions
 - API-key protected admin endpoints
 - Private `/admin` commerce dashboard with orders, inventory controls, financial reports, payment records, leads, CSV export, and cross-location task allocation
-- Individual employee accounts with automatically emailed, expiring one-time invitations, delivery records, password hashing, secure sessions, CSRF protection, lockout controls, and access deactivation
+- Individual employee accounts with automatically emailed invitations and 30-minute one-time temporary passwords, mandatory private-password replacement, delivery records, password hashing, secure sessions, CSRF protection, lockout controls, and access deactivation
+- Server-enforced employee onboarding with Personal Hygiene, Workplace Hygiene, PPE, and Customer Service Training; knowledge checks; signed and dated attestations; employee photo/signature evidence; and management approval before dashboard access
 - Role- and location-scoped `/staff` operations portal for Liberia warehouse, U.S. fulfillment, finance, support, audit, and ownership teams
 - Assigned work queues, two-person physical count approval, Liberia-to-U.S. transfer custody, paid-order fulfillment states, and append-only operational audit history
 - SOW-driven operations with private document, photo, and video uploads; required-evidence gates; manager review; and photo/signature-backed completion records
@@ -173,13 +174,17 @@ The `ADMIN_API_KEY` remains the owner recovery and bootstrap credential. Use it 
 1. Enter the employee's name and work email.
 2. Choose the least-privilege job role and permitted location. Location rules are enforced by the backend, not only hidden in the browser.
 3. Select **Invite and email**. The backend sends the one-time activation link to the employee's address and records its delivery status. The owner dashboard also shows a recovery copy; only the token hash is stored, and a new invitation invalidates the previous one.
-4. The employee opens the link, creates a password of at least 12 characters, and then works from `/staff`.
-5. The employee completes **My profile** with phone, international WhatsApp number, and a profile photo. Managers and owners also upload a signature image before approving work.
-6. Deactivate an employee from `/admin` as soon as access should end. Existing sessions are revoked.
+4. The employee opens the link and creates a password of at least 12 characters. Front-line roles enter the required onboarding gate before any operational dashboard data is returned.
+5. The employee completes Personal Hygiene, Workplace Hygiene, PPE, and Customer Service Training, passes each knowledge check, uploads an employee photo and signature, and signs and dates all acknowledgments.
+6. The employee submits the record to management. The assigned location manager or owner reviews the lessons and identity evidence, then approves with their own profile photo, signature, name, note, and timestamp. Approval opens `/staff`; a returned record stays locked until corrected and resubmitted.
+7. Managers and owners complete **My profile** with their own photo and signature before approving onboarding or completed work. Employees can add phone and international WhatsApp details after access opens.
+8. Deactivate an employee from `/admin` as soon as access should end. Existing sessions are revoked.
 
 Suggested operating assignment: Liberia warehouse staff submit receiving, quality, packing, and count work; a Liberia manager approves counts and dispatches replenishment; U.S. fulfillment receives transfers and advances paid orders through picking, packing, shipment, and delivery; finance and audit roles remain read-only for operational changes. Physical inventory counts require a different approving employee.
 
 Invitation delivery uses Resend's server-side email API. First add and verify a sender domain in Resend, then add `RESEND_API_KEY` and `EMAIL_FROM` to the Railway service variables and redeploy. A dedicated sending subdomain is recommended so transactional staff mail is isolated from other mail. If delivery is unavailable, the employee account and one-time link remain valid, the failure is shown in `/admin`, and **Email new invite** creates and sends a replacement link. See Resend's official [send-email API](https://resend.com/docs/api-reference/emails/send-email) and [domain verification](https://resend.com/docs/dashboard/domains/introduction) guides.
+
+Staff password recovery is available from **Forgot your password?** on `/staff`. The public response is identical for known and unknown email addresses. For an active account, the backend generates a cryptographically random password, stores only its scrypt hash, emails it through Resend, and expires it after 30 minutes. The password works once and creates a restricted session that cannot read staff, onboarding, inventory, order, file, or financial data. The employee must choose a different private password; that change rotates the session, revokes all older sessions, and records the recovery events in the audit log. Failed email delivery leaves the existing private password unchanged.
 
 ### Run documented work and approvals
 

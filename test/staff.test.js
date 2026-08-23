@@ -24,6 +24,11 @@ const unavailableEmail = () => ({
     const error = new Error("Employee invitation email is not configured.");
     error.code = "email_not_configured";
     throw error;
+  },
+  async sendStaffTemporaryPassword() {
+    const error = new Error("Employee password email is not configured.");
+    error.code = "email_not_configured";
+    throw error;
   }
 });
 
@@ -52,12 +57,12 @@ const json = (method, body, headers = {}) => ({
   body: JSON.stringify(body)
 });
 
-const inviteEmployee = async (baseUrl, employee) => {
+const inviteEmployee = async (baseUrl, employee, expectedDelivery = "not_configured") => {
   const response = await fetch(`${baseUrl}/api/v1/admin/staff`, json("POST", employee, adminHeaders));
   const payload = await response.json();
   assert.equal(response.status, 201, JSON.stringify(payload));
   assert.equal(Object.hasOwn(payload.data.user, "passwordHash"), false);
-  assert.equal(payload.data.delivery.status, "not_configured");
+  assert.equal(payload.data.delivery.status, expectedDelivery);
   return {
     user: payload.data.user,
     token: new URL(payload.data.invitationUrl).searchParams.get("invite")
@@ -71,7 +76,8 @@ const acceptInvitation = async (baseUrl, token, password = "correct-horse-batter
   const cookie = String(response.headers.get("set-cookie") || "").split(";")[0];
   assert.match(cookie, /^sr_staff_session=/u);
   assert.match(response.headers.get("set-cookie"), /HttpOnly/u);
-  assert.match(response.headers.get("set-cookie"), /SameSite=Lax/u);
+  assert.match(response.headers.get("set-cookie"), /SameSite=Strict/u);
+  assert.match(response.headers.get("set-cookie"), /Priority=High/u);
   return { cookie, csrfToken: payload.data.csrfToken, user: payload.data.user };
 };
 
@@ -98,6 +104,84 @@ const staffUpload = (baseUrl, pathname, session, { name, type, kind, phase, cont
   },
   body: contents
 });
+
+const onboardingAnswers = Object.freeze({
+  personal_hygiene: "twenty_seconds",
+  workplace_hygiene: "clean_as_you_go",
+  ppe: "inspect_before_use",
+  customer_service: "listen_confirm_resolve"
+});
+
+const completeAndApproveOnboarding = async (baseUrl, employee, reviewer, { uploadReviewerIdentity = true } = {}) => {
+  const locked = await staffFetch(baseUrl, "/api/v1/staff/workspace", employee);
+  assert.equal(locked.status, 403);
+  assert.equal((await locked.json()).error.code, "onboarding_required");
+
+  const employeePhoto = await staffUpload(baseUrl, "/api/v1/staff/profile/files/profile_photo", employee, {
+    name: "employee.png", type: "image/png", contents: Buffer.from("employee-photo")
+  });
+  assert.equal(employeePhoto.status, 201, await employeePhoto.text());
+  const employeeSignature = await staffUpload(baseUrl, "/api/v1/staff/profile/files/signature", employee, {
+    name: "employee-signature.png", type: "image/png", contents: Buffer.from("employee-signature")
+  });
+  assert.equal(employeeSignature.status, 201, await employeeSignature.text());
+
+  for (const [moduleId, answer] of Object.entries(onboardingAnswers)) {
+    const completed = await staffFetch(baseUrl, `/api/v1/staff/onboarding/modules/${moduleId}/complete`, employee, {
+      method: "POST", body: { answer }
+    });
+    assert.equal(completed.status, 200, await completed.text());
+  }
+
+  const submitted = await staffFetch(baseUrl, "/api/v1/staff/onboarding/submit", employee, {
+    method: "POST",
+    body: {
+      signedName: employee.user.name,
+      signedDate: new Date().toISOString().slice(0, 10),
+      acknowledgments: ["truthful", "safety", "policy"]
+    }
+  });
+  const submittedPayload = await submitted.json();
+  assert.equal(submitted.status, 200, JSON.stringify(submittedPayload));
+  assert.equal(submittedPayload.data.status, "pending_review");
+
+  if (uploadReviewerIdentity) {
+    const reviewerPhoto = await staffUpload(baseUrl, "/api/v1/staff/profile/files/profile_photo", reviewer, {
+      name: "reviewer.png", type: "image/png", contents: Buffer.from("reviewer-photo")
+    });
+    assert.equal(reviewerPhoto.status, 201, await reviewerPhoto.text());
+    const reviewerSignature = await staffUpload(baseUrl, "/api/v1/staff/profile/files/signature", reviewer, {
+      name: "reviewer-signature.png", type: "image/png", contents: Buffer.from("reviewer-signature")
+    });
+    assert.equal(reviewerSignature.status, 201, await reviewerSignature.text());
+  }
+
+  const reviewQueue = await staffFetch(baseUrl, "/api/v1/staff/workspace", reviewer);
+  const reviewQueuePayload = await reviewQueue.json();
+  assert.equal(reviewQueue.status, 200, JSON.stringify(reviewQueuePayload));
+  assert.equal(reviewQueuePayload.data.onboardingReviews.some((record) => record.user.id === employee.user.id && record.status === "pending_review"), true);
+
+  const approved = await staffFetch(baseUrl, `/api/v1/staff/onboarding/reviews/${employee.user.id}`, reviewer, {
+    method: "POST", body: { decision: "approve", reviewNote: "Training and signed identity record verified." }
+  });
+  const approvedPayload = await approved.json();
+  assert.equal(approved.status, 200, JSON.stringify(approvedPayload));
+  assert.equal(approvedPayload.data.status, "approved");
+  assert.equal(approvedPayload.data.dashboardAccess, true);
+  assert.equal(approvedPayload.data.review.reviewedByName, reviewer.user.name);
+  assert.match(approvedPayload.data.review.managerPhotoUrl, /\/api\/v1\/staff\/files\//u);
+  assert.match(approvedPayload.data.review.managerSignatureUrl, /\/api\/v1\/staff\/files\//u);
+  const opened = await staffFetch(baseUrl, "/api/v1/staff/workspace", employee);
+  const openedPayload = await opened.json();
+  assert.equal(opened.status, 200, JSON.stringify(openedPayload));
+  assert.equal(openedPayload.data.onboarding.status, "approved");
+  assert.equal(openedPayload.data.onboarding.review.reviewedByName, reviewer.user.name);
+  const managerPhoto = await staffFetch(baseUrl, approvedPayload.data.review.managerPhotoUrl, employee);
+  assert.equal(managerPhoto.status, 200);
+  const managerSignature = await staffFetch(baseUrl, approvedPayload.data.review.managerSignatureUrl, employee);
+  assert.equal(managerSignature.status, 200);
+  return approvedPayload.data;
+};
 
 test("admin employee invitations are emailed and delivery records remain visible", async () => {
   const deliveries = [];
@@ -159,6 +243,261 @@ test("admin employee invitations are emailed and delivery records remain visible
   }, { email });
 });
 
+test("staff password recovery emails a one-time temporary password and blocks all data until it is changed", async () => {
+  const temporaryPasswordDeliveries = [];
+  const email = {
+    configured: true,
+    status: () => ({
+      provider: "resend",
+      configured: true,
+      from: "SEVEN ROOTS <staff@updates.sevenroots.example>",
+      replyTo: null,
+      missingSettings: []
+    }),
+    async sendStaffInvitation() {
+      return { provider: "resend", messageId: "email_invitation", sentAt: new Date().toISOString() };
+    },
+    async sendStaffTemporaryPassword(input) {
+      temporaryPasswordDeliveries.push(input);
+      return { provider: "resend", messageId: "email_temporary_password", sentAt: new Date().toISOString() };
+    }
+  };
+
+  await withServer(async (baseUrl) => {
+    const invited = await inviteEmployee(baseUrl, {
+      name: "Martha Kromah",
+      email: "martha.recovery@example.com",
+      role: "liberia_staff",
+      country: "Liberia",
+      locations: ["liberia"]
+    }, "sent");
+    const original = await acceptInvitation(baseUrl, invited.token, "original-private-password");
+
+    const requested = await fetch(`${baseUrl}/api/v1/staff/auth/temporary-password/request`, json("POST", {
+      email: "MARTHA.RECOVERY@example.com"
+    }));
+    const requestedPayload = await requested.json();
+    assert.equal(requested.status, 202, JSON.stringify(requestedPayload));
+    assert.deepEqual(requestedPayload.data, { accepted: true });
+    assert.equal(temporaryPasswordDeliveries.length, 1);
+    const temporaryPassword = temporaryPasswordDeliveries[0].temporaryPassword;
+    assert.match(temporaryPassword, /^SR-[A-Za-z0-9_-]{24}$/u);
+    assert.equal(JSON.stringify(requestedPayload).includes(temporaryPassword), false);
+    assert.match(temporaryPasswordDeliveries[0].staffUrl, /\/staff$/u);
+
+    const unknown = await fetch(`${baseUrl}/api/v1/staff/auth/temporary-password/request`, json("POST", {
+      email: "not-a-staff-member@example.com"
+    }));
+    const unknownPayload = await unknown.json();
+    assert.equal(unknown.status, 202);
+    assert.equal(unknownPayload.message, requestedPayload.message);
+    assert.equal(temporaryPasswordDeliveries.length, 1);
+
+    const temporaryLogin = await fetch(`${baseUrl}/api/v1/staff/auth/login`, json("POST", {
+      email: "martha.recovery@example.com",
+      password: temporaryPassword
+    }));
+    const temporaryLoginPayload = await temporaryLogin.json();
+    assert.equal(temporaryLogin.status, 200, JSON.stringify(temporaryLoginPayload));
+    assert.equal(temporaryLoginPayload.data.user.passwordChangeRequired, true);
+    const temporarySession = {
+      cookie: String(temporaryLogin.headers.get("set-cookie") || "").split(";")[0],
+      csrfToken: temporaryLoginPayload.data.csrfToken,
+      user: temporaryLoginPayload.data.user
+    };
+
+    const originalRevoked = await staffFetch(baseUrl, "/api/v1/staff/auth/session", original);
+    assert.equal(originalRevoked.status, 401);
+    const protectedData = await staffFetch(baseUrl, "/api/v1/staff/onboarding", temporarySession);
+    assert.equal(protectedData.status, 403);
+    assert.equal((await protectedData.json()).error.code, "password_change_required");
+
+    const reusedTemporary = await fetch(`${baseUrl}/api/v1/staff/auth/login`, json("POST", {
+      email: "martha.recovery@example.com",
+      password: temporaryPassword
+    }));
+    assert.equal(reusedTemporary.status, 401);
+
+    const missingCsrf = await fetch(`${baseUrl}/api/v1/staff/auth/change-password`, json("POST", {
+      password: "new-private-password-for-martha"
+    }, { cookie: temporarySession.cookie }));
+    assert.equal(missingCsrf.status, 403);
+    assert.equal((await missingCsrf.json()).error.code, "csrf_failed");
+
+    const reusedAsPrivate = await staffFetch(baseUrl, "/api/v1/staff/auth/change-password", temporarySession, {
+      method: "POST",
+      body: { password: temporaryPassword }
+    });
+    assert.equal(reusedAsPrivate.status, 422);
+    assert.equal((await reusedAsPrivate.json()).error.code, "password_reused");
+
+    const changed = await staffFetch(baseUrl, "/api/v1/staff/auth/change-password", temporarySession, {
+      method: "POST",
+      body: { password: "new-private-password-for-martha" }
+    });
+    const changedPayload = await changed.json();
+    assert.equal(changed.status, 200, JSON.stringify(changedPayload));
+    assert.equal(changedPayload.data.user.passwordChangeRequired, false);
+    const changedSession = {
+      cookie: String(changed.headers.get("set-cookie") || "").split(";")[0],
+      csrfToken: changedPayload.data.csrfToken,
+      user: changedPayload.data.user
+    };
+
+    const temporarySessionRevoked = await staffFetch(baseUrl, "/api/v1/staff/auth/session", temporarySession);
+    assert.equal(temporarySessionRevoked.status, 401);
+    const onboardingAvailable = await staffFetch(baseUrl, "/api/v1/staff/onboarding", changedSession);
+    assert.equal(onboardingAvailable.status, 200);
+
+    const oldPassword = await fetch(`${baseUrl}/api/v1/staff/auth/login`, json("POST", {
+      email: "martha.recovery@example.com",
+      password: "original-private-password"
+    }));
+    assert.equal(oldPassword.status, 401);
+    const newPassword = await fetch(`${baseUrl}/api/v1/staff/auth/login`, json("POST", {
+      email: "martha.recovery@example.com",
+      password: "new-private-password-for-martha"
+    }));
+    assert.equal(newPassword.status, 200);
+
+    const audit = await fetch(`${baseUrl}/api/v1/admin/audit`, { headers: adminHeaders });
+    const actions = (await audit.json()).data.map((entry) => entry.action);
+    for (const action of [
+      "staff.temporary_password_requested",
+      "staff.temporary_password_sent",
+      "staff.temporary_password_used",
+      "staff.password_changed"
+    ]) assert.equal(actions.includes(action), true, action);
+  }, { email });
+});
+
+test("failed temporary-password delivery preserves the employee's existing private password", async () => {
+  let undeliveredTemporaryPassword = "";
+  const email = {
+    configured: true,
+    status: () => ({ provider: "resend", configured: true, from: "SEVEN ROOTS <staff@updates.sevenroots.example>", replyTo: null, missingSettings: [] }),
+    async sendStaffInvitation() {
+      return { provider: "resend", messageId: "email_invitation", sentAt: new Date().toISOString() };
+    },
+    async sendStaffTemporaryPassword(input) {
+      undeliveredTemporaryPassword = input.temporaryPassword;
+      throw new Error("Provider unavailable");
+    }
+  };
+  await withServer(async (baseUrl) => {
+    const invited = await inviteEmployee(baseUrl, {
+      name: "Ava Williams",
+      email: "ava.recovery@example.com",
+      role: "us_fulfillment",
+      country: "United States",
+      locations: ["us"]
+    }, "sent");
+    await acceptInvitation(baseUrl, invited.token, "ava-existing-private-password");
+
+    const requested = await fetch(`${baseUrl}/api/v1/staff/auth/temporary-password/request`, json("POST", {
+      email: "ava.recovery@example.com"
+    }));
+    assert.equal(requested.status, 202);
+    assert.match(undeliveredTemporaryPassword, /^SR-/u);
+
+    const undelivered = await fetch(`${baseUrl}/api/v1/staff/auth/login`, json("POST", {
+      email: "ava.recovery@example.com",
+      password: undeliveredTemporaryPassword
+    }));
+    assert.equal(undelivered.status, 401);
+    const existing = await fetch(`${baseUrl}/api/v1/staff/auth/login`, json("POST", {
+      email: "ava.recovery@example.com",
+      password: "ava-existing-private-password"
+    }));
+    assert.equal(existing.status, 200);
+  }, { email });
+});
+
+test("onboarding corrections keep operations locked until a signed management approval", async () => {
+  await withServer(async (baseUrl) => {
+    const managerInvite = await inviteEmployee(baseUrl, {
+      name: "Samuel Cooper",
+      email: "samuel.onboarding@example.com",
+      role: "liberia_manager",
+      country: "Liberia",
+      locations: ["liberia"]
+    });
+    const manager = await acceptInvitation(baseUrl, managerInvite.token);
+    const employeeInvite = await inviteEmployee(baseUrl, {
+      name: "Martha Kromah",
+      email: "martha.onboarding@example.com",
+      role: "liberia_staff",
+      country: "Liberia",
+      locations: ["liberia"],
+      managerId: manager.user.id
+    });
+    const employee = await acceptInvitation(baseUrl, employeeInvite.token);
+
+    for (const [session, prefix] of [[manager, "manager"], [employee, "employee"]]) {
+      const photo = await staffUpload(baseUrl, "/api/v1/staff/profile/files/profile_photo", session, {
+        name: `${prefix}.png`, type: "image/png", contents: Buffer.from(`${prefix}-photo`)
+      });
+      assert.equal(photo.status, 201, await photo.text());
+      const signature = await staffUpload(baseUrl, "/api/v1/staff/profile/files/signature", session, {
+        name: `${prefix}-signature.png`, type: "image/png", contents: Buffer.from(`${prefix}-signature`)
+      });
+      assert.equal(signature.status, 201, await signature.text());
+    }
+
+    const incorrect = await staffFetch(baseUrl, "/api/v1/staff/onboarding/modules/ppe/complete", employee, {
+      method: "POST", body: { answer: "skip_handwashing" }
+    });
+    assert.equal(incorrect.status, 422);
+    assert.equal((await incorrect.json()).error.code, "onboarding_answer_incorrect");
+
+    for (const [moduleId, answer] of Object.entries(onboardingAnswers)) {
+      const completed = await staffFetch(baseUrl, `/api/v1/staff/onboarding/modules/${moduleId}/complete`, employee, {
+        method: "POST", body: { answer }
+      });
+      assert.equal(completed.status, 200, await completed.text());
+    }
+    const signedRecord = {
+      signedName: employee.user.name,
+      signedDate: new Date().toISOString().slice(0, 10),
+      acknowledgments: ["truthful", "safety", "policy"]
+    };
+    const submitted = await staffFetch(baseUrl, "/api/v1/staff/onboarding/submit", employee, {
+      method: "POST", body: signedRecord
+    });
+    assert.equal(submitted.status, 200, await submitted.text());
+
+    const returned = await staffFetch(baseUrl, `/api/v1/staff/onboarding/reviews/${employee.user.id}`, manager, {
+      method: "POST", body: { decision: "request_changes", reviewNote: "Retake the employee photo in clear light." }
+    });
+    const returnedPayload = await returned.json();
+    assert.equal(returned.status, 200, JSON.stringify(returnedPayload));
+    assert.equal(returnedPayload.data.status, "changes_requested");
+    assert.equal(returnedPayload.data.review.note, "Retake the employee photo in clear light.");
+
+    const stillLocked = await staffFetch(baseUrl, "/api/v1/staff/workspace", employee);
+    assert.equal(stillLocked.status, 403);
+    const replacementPhoto = await staffUpload(baseUrl, "/api/v1/staff/profile/files/profile_photo", employee, {
+      name: "employee-clear.png", type: "image/png", contents: Buffer.from("employee-clear-photo")
+    });
+    assert.equal(replacementPhoto.status, 201, await replacementPhoto.text());
+    const resubmitted = await staffFetch(baseUrl, "/api/v1/staff/onboarding/submit", employee, {
+      method: "POST", body: signedRecord
+    });
+    assert.equal(resubmitted.status, 200, await resubmitted.text());
+    const approved = await staffFetch(baseUrl, `/api/v1/staff/onboarding/reviews/${employee.user.id}`, manager, {
+      method: "POST", body: { decision: "approve", reviewNote: "Replacement photo and training record approved." }
+    });
+    assert.equal(approved.status, 200, await approved.text());
+    const opened = await staffFetch(baseUrl, "/api/v1/staff/workspace", employee);
+    assert.equal(opened.status, 200, await opened.text());
+
+    const audit = await fetch(`${baseUrl}/api/v1/admin/audit`, { headers: adminHeaders });
+    const auditPayload = await audit.json();
+    assert.equal(auditPayload.data.some((event) => event.action === "onboarding.changes_requested"), true);
+    assert.equal(auditPayload.data.some((event) => event.action === "onboarding.approved"), true);
+  });
+});
+
 test("task evidence requires manager approval with protected files, photo, signature, contacts, and WhatsApp updates", async () => {
   const whatsappCalls = [];
   const whatsapp = {
@@ -208,6 +547,7 @@ test("task evidence requires manager approval with protected files, photo, signa
       name: "signature.png", type: "image/png", contents: Buffer.from("signed-by-owner")
     });
     assert.equal(ownerSignature.status, 201, await ownerSignature.text());
+    await completeAndApproveOnboarding(baseUrl, worker, owner, { uploadReviewerIdentity: false });
 
     const created = await staffFetch(baseUrl, "/api/v1/staff/tasks", owner, {
       method: "POST",
@@ -318,6 +658,7 @@ test("admin allocates tasks while location managers create and approve employee 
       name: "manager-signature.png", type: "image/png", contents: Buffer.from("manager-signature")
     });
     assert.equal(managerSignature.status, 201, await managerSignature.text());
+    await completeAndApproveOnboarding(baseUrl, worker, manager, { uploadReviewerIdentity: false });
 
     const created = await fetch(`${baseUrl}/api/v1/admin/tasks`, json("POST", {
       title: "Prepare export batch records",
@@ -408,6 +749,9 @@ test("staff invitations create secure individual sessions and enforce Liberia ro
   await withServer(async (baseUrl) => {
     const staffPage = await fetch(`${baseUrl}/staff`);
     assert.equal(staffPage.status, 200);
+    assert.equal(staffPage.headers.get("referrer-policy"), "no-referrer");
+    assert.equal(staffPage.headers.get("cache-control"), "no-store");
+    assert.match(staffPage.headers.get("content-security-policy"), /frame-ancestors 'none'/u);
     assert.match(await staffPage.text(), /STAFF OPERATIONS/u);
 
     const roles = await fetch(`${baseUrl}/api/v1/admin/staff/roles`, { headers: adminHeaders });
@@ -433,6 +777,16 @@ test("staff invitations create secure individual sessions and enforce Liberia ro
 
     const session = await acceptInvitation(baseUrl, invited.token);
     assert.equal(session.user.role, "liberia_staff");
+
+    const reviewerInvite = await inviteEmployee(baseUrl, {
+      name: "Samuel Cooper",
+      email: "samuel.boundary@example.com",
+      role: "liberia_manager",
+      country: "Liberia",
+      locations: ["liberia"]
+    });
+    const reviewer = await acceptInvitation(baseUrl, reviewerInvite.token);
+    await completeAndApproveOnboarding(baseUrl, session, reviewer);
 
     const workspace = await staffFetch(baseUrl, "/api/v1/staff/workspace", session);
     const workspacePayload = await workspace.json();
@@ -501,6 +855,7 @@ test("stock counts require a second approver and stay scoped to the employee loc
     const counter = await acceptInvitation(baseUrl, counterInvite.token);
     const manager = await acceptInvitation(baseUrl, managerInvite.token);
     const usManager = await acceptInvitation(baseUrl, usInvite.token);
+    await completeAndApproveOnboarding(baseUrl, counter, manager);
 
     const submitted = await staffFetch(baseUrl, "/api/v1/staff/inventory/counts", counter, {
       method: "POST",

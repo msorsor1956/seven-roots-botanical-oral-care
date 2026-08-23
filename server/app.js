@@ -1,6 +1,6 @@
 import { createReadStream } from "node:fs";
 import { stat } from "node:fs/promises";
-import { createHash, randomUUID, timingSafeEqual } from "node:crypto";
+import { createHash, randomBytes, randomUUID, timingSafeEqual } from "node:crypto";
 import http from "node:http";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -170,11 +170,16 @@ const serveFile = async (request, response, filePath, status = 200) => {
     if (!file.isFile()) return false;
     const extension = path.extname(filePath).toLowerCase();
     const immutable = filePath.includes(`${path.sep}assets${path.sep}`);
+    const staffPage = path.basename(filePath) === "staff.html";
     response.writeHead(status, {
       "Content-Type": contentTypes.get(extension) || "application/octet-stream",
       "Content-Length": file.size,
-      "Cache-Control": immutable ? "public, max-age=604800, immutable" : "public, max-age=300",
-      "X-Content-Type-Options": "nosniff"
+      "Cache-Control": staffPage ? "no-store" : immutable ? "public, max-age=604800, immutable" : "public, max-age=300",
+      "X-Content-Type-Options": "nosniff",
+      ...(staffPage ? {
+        "Content-Security-Policy": "default-src 'self'; base-uri 'self'; object-src 'none'; frame-ancestors 'none'; form-action 'self'; script-src 'self'; style-src 'self'; img-src 'self' data:; connect-src 'self'; font-src 'self'; media-src 'self'",
+        "Referrer-Policy": "no-referrer"
+      } : {})
     });
     if (request.method === "HEAD") response.end();
     else createReadStream(filePath).pipe(response);
@@ -195,7 +200,10 @@ export async function createApplication(options = {}) {
     .split(",").map((origin) => origin.trim()).filter(Boolean);
   let configuredPublicOrigin = "";
   try {
-    configuredPublicOrigin = new URL(publicBaseUrl).origin;
+    const parsedPublicBaseUrl = new URL(publicBaseUrl);
+    if (environment !== "production" || parsedPublicBaseUrl.protocol === "https:") {
+      configuredPublicOrigin = parsedPublicBaseUrl.origin;
+    }
   } catch {}
   const store = options.store || await new JsonStore(dataDir).init();
   const payments = options.payments || createPayments(options.paymentOptions);
@@ -218,6 +226,7 @@ export async function createApplication(options = {}) {
   const checkoutLimiter = createRateLimiter({ windowMs: 15 * 60 * 1000, max: 8 });
   const connectorLimiter = createRateLimiter({ windowMs: 15 * 60 * 1000, max: 12 });
   const staffAuthLimiter = createRateLimiter({ windowMs: 15 * 60 * 1000, max: 12 });
+  const staffRecoveryLimiter = createRateLimiter({ windowMs: 15 * 60 * 1000, max: 10 });
   const staffFileLimiter = createRateLimiter({ windowMs: 15 * 60 * 1000, max: 40 });
   let zohoProcessing = false;
   const zohoStatus = () => ({ ...zoho.status(store.zohoSyncState()), oauth: zohoOAuth.status() });
@@ -285,6 +294,32 @@ export async function createApplication(options = {}) {
       }, adminActor);
     }
   };
+  const deliverStaffTemporaryPassword = async (created, temporaryPassword, staffUrl) => {
+    const attemptedAt = new Date().toISOString();
+    try {
+      const result = await email.sendStaffTemporaryPassword({
+        user: created.user,
+        temporaryPassword,
+        expiresAt: created.temporaryPassword.expiresAt,
+        temporaryPasswordId: created.temporaryPassword.id,
+        staffUrl
+      });
+      return store.recordStaffTemporaryPasswordDelivery(created.temporaryPassword.id, {
+        status: "sent",
+        attemptedAt,
+        provider: result.provider,
+        messageId: result.messageId,
+        sentAt: result.sentAt
+      });
+    } catch (error) {
+      return store.recordStaffTemporaryPasswordDelivery(created.temporaryPassword.id, {
+        status: "failed",
+        attemptedAt,
+        provider: email.status().provider,
+        error: error?.message || "The temporary password email could not be delivered."
+      });
+    }
+  };
   const deliverTaskWhatsApp = async (task, event) => {
     const attemptedAt = new Date().toISOString();
     const contact = store.staffTaskNotificationContact(task.id, event);
@@ -320,16 +355,29 @@ export async function createApplication(options = {}) {
       });
     }
   };
-  const requireStaff = async (request, permission = "") => {
+  const requireStaff = async (request, permission = "", { allowPasswordChange = false } = {}) => {
     const authentication = await store.staffSession(readStaffSessionCookie(request));
     if (!authentication) throw new HttpError(401, "staff_unauthorized", "Sign in with an active staff account.");
+    if (authentication.session.passwordChangeRequired && !allowPasswordChange) {
+      throw new HttpError(403, "password_change_required", "Create your private password before opening staff information.");
+    }
     if (permission && !hasStaffPermission(authentication.user, permission)) {
       throw new HttpError(403, "staff_forbidden", "Your role does not allow this action.");
     }
     return authentication;
   };
-  const requireStaffMutation = async (request, permission = "") => {
+  const requireDashboardStaff = async (request, permission = "") => {
     const authentication = await requireStaff(request, permission);
+    if (!store.staffDashboardAccess(authentication.user)) {
+      throw new HttpError(403, "onboarding_required", "Complete onboarding and receive management approval before opening the staff dashboard.");
+    }
+    return authentication;
+  };
+  const requireStaffMutation = async (request, permission = "", { allowOnboarding = false, allowPasswordChange = false } = {}) => {
+    const authentication = await requireStaff(request, permission, { allowPasswordChange });
+    if (!allowOnboarding && !store.staffDashboardAccess(authentication.user)) {
+      throw new HttpError(403, "onboarding_required", "Complete onboarding and receive management approval before using staff operations.");
+    }
     if (!secureStaffValueEqual(request.headers["x-csrf-token"], authentication.session.csrfToken)) {
       throw new HttpError(403, "csrf_failed", "Refresh the staff dashboard and try again.");
     }
@@ -394,7 +442,7 @@ export async function createApplication(options = {}) {
         sendJson(response, 200, {
           status: "ok",
           service: "seven-roots-api",
-          version: "1.10.0",
+          version: "1.12.0",
           storage: "file",
           payments: payments.configured ? "ready" : "configuration_required",
           inventoryIntegration: zoho.active ? "zoho_enabled" : "local",
@@ -549,6 +597,31 @@ export async function createApplication(options = {}) {
         return;
       }
 
+      if (request.method === "POST" && pathname === "/api/v1/staff/auth/temporary-password/request") {
+        const rate = staffRecoveryLimiter(request);
+        if (!rate.allowed) throw new HttpError(429, "rate_limited", "Too many password requests. Try again later.", { retryAfter: rate.retryAfter });
+        const input = await readJson(request);
+        const temporaryPassword = `SR-${randomBytes(18).toString("base64url")}`;
+        const created = await store.issueStaffTemporaryPassword(input.email, temporaryPassword);
+        if (created) {
+          const trustedOrigin = configuredPublicOrigin || (environment === "production" ? "" : hostOrigin || "http://localhost");
+          const delivery = trustedOrigin
+            ? deliverStaffTemporaryPassword(created, temporaryPassword, `${trustedOrigin}/staff`)
+            : store.recordStaffTemporaryPasswordDelivery(created.temporaryPassword.id, {
+              status: "failed",
+              attemptedAt: new Date().toISOString(),
+              provider: email.status().provider,
+              error: "PUBLIC_BASE_URL is required for staff password email."
+            });
+          void delivery.catch(() => console.error(`[${requestId}] Temporary password delivery recording failed.`));
+        }
+        sendJson(response, 202, {
+          data: { accepted: true },
+          message: "If an active staff account matches that email, a one-time temporary password will be sent."
+        });
+        return;
+      }
+
       if (request.method === "POST" && pathname === "/api/v1/staff/auth/login") {
         const rate = staffAuthLimiter(request);
         if (!rate.allowed) throw new HttpError(429, "rate_limited", "Too many sign-in attempts. Try again later.", { retryAfter: rate.retryAfter });
@@ -562,7 +635,7 @@ export async function createApplication(options = {}) {
       }
 
       if (request.method === "GET" && pathname === "/api/v1/staff/auth/session") {
-        const authentication = await requireStaff(request);
+        const authentication = await requireStaff(request, "", { allowPasswordChange: true });
         sendJson(response, 200, {
           data: {
             user: authentication.publicUser,
@@ -573,8 +646,19 @@ export async function createApplication(options = {}) {
         return;
       }
 
+      if (request.method === "POST" && pathname === "/api/v1/staff/auth/change-password") {
+        const authentication = await requireStaffMutation(request, "", { allowOnboarding: true, allowPasswordChange: true });
+        const input = await readJson(request);
+        const changed = await store.changeTemporaryStaffPassword(authentication.user.id, authentication.session.id, input.password);
+        sendJson(response, 200, {
+          data: { user: changed.user, csrfToken: changed.csrfToken, expiresAt: changed.expiresAt },
+          message: "Your private staff password is ready."
+        }, { "Set-Cookie": staffSessionCookie(changed.token, { secure: environment === "production" }) });
+        return;
+      }
+
       if (request.method === "POST" && pathname === "/api/v1/staff/auth/logout") {
-        await requireStaffMutation(request);
+        await requireStaffMutation(request, "", { allowOnboarding: true, allowPasswordChange: true });
         await store.endStaffSession(readStaffSessionCookie(request));
         sendJson(response, 200, { data: { signedOut: true }, message: "Staff session ended." }, {
           "Set-Cookie": clearStaffSessionCookie({ secure: environment === "production" })
@@ -600,14 +684,14 @@ export async function createApplication(options = {}) {
       }
 
       if (request.method === "PATCH" && pathname === "/api/v1/staff/profile") {
-        const authentication = await requireStaffMutation(request, "profile.update");
+        const authentication = await requireStaffMutation(request, "profile.update", { allowOnboarding: true });
         const user = await store.updateOwnStaffProfile(authentication.user, await readJson(request));
         sendJson(response, 200, { data: user, message: "Contact profile updated." });
         return;
       }
 
       if (request.method === "POST" && pathname.startsWith("/api/v1/staff/profile/files/")) {
-        const authentication = await requireStaffMutation(request, "profile.update");
+        const authentication = await requireStaffMutation(request, "profile.update", { allowOnboarding: true });
         const rate = staffFileLimiter(request);
         if (!rate.allowed) throw new HttpError(429, "rate_limited", "Too many file uploads. Try again later.", { retryAfter: rate.retryAfter });
         const kind = pathname.slice("/api/v1/staff/profile/files/".length);
@@ -620,7 +704,7 @@ export async function createApplication(options = {}) {
             originalName: request.headers["x-file-name"]
           });
           const result = await store.attachStaffProfileFile(authentication.user, file);
-          sendJson(response, 201, { data: result, message: kind === "signature" ? "Manager signature uploaded." : "Profile photo uploaded." });
+          sendJson(response, 201, { data: result, message: kind === "signature" ? "Employee signature uploaded." : "Employee photo uploaded." });
         } catch (error) {
           if (file) await workFiles.remove(file);
           throw error;
@@ -628,8 +712,40 @@ export async function createApplication(options = {}) {
         return;
       }
 
-      if (request.method === "GET" && pathname === "/api/v1/staff/workspace") {
+      if (request.method === "GET" && pathname === "/api/v1/staff/onboarding") {
         const authentication = await requireStaff(request);
+        sendJson(response, 200, { data: store.staffOnboarding(authentication.user) });
+        return;
+      }
+
+      if (request.method === "POST" && pathname.startsWith("/api/v1/staff/onboarding/modules/") && pathname.endsWith("/complete")) {
+        const authentication = await requireStaffMutation(request, "profile.update", { allowOnboarding: true });
+        const moduleId = pathname.slice("/api/v1/staff/onboarding/modules/".length, -"/complete".length);
+        const onboarding = await store.completeStaffOnboardingModule(authentication.user, moduleId, await readJson(request));
+        sendJson(response, 200, { data: onboarding, message: "Training module completed." });
+        return;
+      }
+
+      if (request.method === "POST" && pathname === "/api/v1/staff/onboarding/submit") {
+        const authentication = await requireStaffMutation(request, "profile.update", { allowOnboarding: true });
+        const onboarding = await store.submitStaffOnboarding(authentication.user, await readJson(request));
+        sendJson(response, 200, { data: onboarding, message: "Onboarding submitted to management for review." });
+        return;
+      }
+
+      if (request.method === "POST" && pathname.startsWith("/api/v1/staff/onboarding/reviews/")) {
+        const authentication = await requireStaffMutation(request, "onboarding.review");
+        const employeeId = pathname.slice("/api/v1/staff/onboarding/reviews/".length);
+        const onboarding = await store.reviewStaffOnboarding(authentication.user, employeeId, await readJson(request));
+        sendJson(response, 200, {
+          data: onboarding,
+          message: onboarding.status === "approved" ? "Onboarding approved. Dashboard access is open." : "Onboarding returned to the employee for changes."
+        });
+        return;
+      }
+
+      if (request.method === "GET" && pathname === "/api/v1/staff/workspace") {
+        const authentication = await requireDashboardStaff(request);
         sendJson(response, 200, {
           data: {
             ...store.staffWorkspace(authentication.user),
@@ -847,8 +963,10 @@ export async function createApplication(options = {}) {
           return;
         }
         if (request.method === "POST" && pathname === "/api/v1/admin/staff") {
+          const invitationOrigin = configuredPublicOrigin || (environment === "production" ? "" : hostOrigin || "http://localhost");
+          if (!invitationOrigin) throw new HttpError(503, "public_base_url_required", "Configure an HTTPS PUBLIC_BASE_URL before emailing staff access.");
           const created = await store.createStaffUser(await readJson(request), adminActor);
-          const invitationUrl = `${configuredPublicOrigin || hostOrigin || "http://localhost"}/staff?invite=${encodeURIComponent(created.invitation.token)}`;
+          const invitationUrl = `${invitationOrigin}/staff?invite=${encodeURIComponent(created.invitation.token)}`;
           const delivery = await deliverStaffInvitation(created, invitationUrl);
           sendJson(response, 201, {
             data: { user: created.user, invitationUrl, expiresAt: created.invitation.expiresAt, delivery },
@@ -860,8 +978,10 @@ export async function createApplication(options = {}) {
         }
         if (request.method === "POST" && pathname.startsWith("/api/v1/admin/staff/") && pathname.endsWith("/invitations")) {
           const userId = pathname.slice("/api/v1/admin/staff/".length, -"/invitations".length);
+          const invitationOrigin = configuredPublicOrigin || (environment === "production" ? "" : hostOrigin || "http://localhost");
+          if (!invitationOrigin) throw new HttpError(503, "public_base_url_required", "Configure an HTTPS PUBLIC_BASE_URL before emailing staff access.");
           const created = await store.issueStaffInvitation(userId, adminActor);
-          const invitationUrl = `${configuredPublicOrigin || hostOrigin || "http://localhost"}/staff?invite=${encodeURIComponent(created.invitation.token)}`;
+          const invitationUrl = `${invitationOrigin}/staff?invite=${encodeURIComponent(created.invitation.token)}`;
           const delivery = await deliverStaffInvitation(created, invitationUrl);
           sendJson(response, 201, {
             data: { user: created.user, invitationUrl, expiresAt: created.invitation.expiresAt, delivery },
