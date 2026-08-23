@@ -103,7 +103,8 @@ const publicOnboardingReview = (review) => review ? {
   reviewedByName: review.reviewedByName,
   reviewedAt: review.reviewedAt,
   managerPhotoUrl: onboardingFileUrl(review.managerPhoto),
-  managerSignatureUrl: onboardingFileUrl(review.managerSignature)
+  managerSignatureUrl: onboardingFileUrl(review.managerSignature),
+  authorizationMethod: review.authorizationMethod || "staff_session"
 } : null;
 
 const publicOnboardingRecord = (user) => {
@@ -1057,6 +1058,7 @@ export class JsonStore {
       const invitation = this.data.staffInvitations.find((item) => item.userId === user.id);
       return {
         ...publicStaffUser(user),
+        onboarding: publicOnboardingRecord(user),
         invitationDelivery: invitation ? {
           invitationId: invitation.id,
           status: invitation.deliveryStatus || "unknown",
@@ -1909,6 +1911,18 @@ export class JsonStore {
       });
   }
 
+  adminOnboardingReviews() {
+    return this.data.staffUsers
+      .filter((employee) => staffOnboardingRequired(employee))
+      .map(publicOnboardingRecord)
+      .sort((left, right) => {
+        const order = { pending_review: 0, changes_requested: 1, in_progress: 2, not_started: 3, approved: 4 };
+        const statusDifference = (order[left.status] ?? 9) - (order[right.status] ?? 9);
+        if (statusDifference) return statusDifference;
+        return left.user.name.localeCompare(right.user.name);
+      });
+  }
+
   async reviewStaffOnboarding(actor, employeeId, input) {
     if (!hasStaffPermission(actor, "onboarding.review")) throw new StaffAccessError("You cannot review employee onboarding.");
     const employee = this.data.staffUsers.find((item) => item.id === employeeId);
@@ -1918,8 +1932,9 @@ export class JsonStore {
     if (employee.onboarding?.status !== "pending_review") {
       throw new StaffAccessError("Only a pending onboarding submission can be reviewed.", "onboarding_not_pending", 409);
     }
+    const adminKeyApproval = actor.id === "owner-admin-key";
     const reviewer = this.data.staffUsers.find((item) => item.id === actor.id);
-    if (!reviewer?.profilePhoto?.id || !reviewer?.signature?.id) {
+    if (!adminKeyApproval && (!reviewer?.profilePhoto?.id || !reviewer?.signature?.id)) {
       throw new StaffAccessError("Upload your manager photo and signature before approving onboarding.", "manager_identity_required", 409);
     }
     const decision = cleanStaffText(input?.decision, 30).toLowerCase();
@@ -1934,11 +1949,12 @@ export class JsonStore {
     const review = {
       decision: decision === "approve" ? "approved" : "changes_requested",
       note,
-      reviewedBy: reviewer.id,
-      reviewedByName: reviewer.name,
+      reviewedBy: adminKeyApproval ? actor.id : reviewer.id,
+      reviewedByName: adminKeyApproval ? cleanStaffText(input?.reviewedByName, 120) || actor.name : reviewer.name,
       reviewedAt: now,
-      managerPhoto: { ...reviewer.profilePhoto },
-      managerSignature: { ...reviewer.signature }
+      managerPhoto: adminKeyApproval ? null : { ...reviewer.profilePhoto },
+      managerSignature: adminKeyApproval ? null : { ...reviewer.signature },
+      authorizationMethod: adminKeyApproval ? "admin_api_key" : "staff_session"
     };
     employee.onboarding.reviewHistory ||= [];
     employee.onboarding.reviewHistory.unshift(review);
@@ -1949,8 +1965,8 @@ export class JsonStore {
     this.#addAudit(actor, `onboarding.${review.decision}`, "staff_user", employee.id, {
       location: employee.locations.join(","),
       summary: review.decision === "approved"
-        ? `${reviewer.name} approved ${employee.name}'s onboarding and opened dashboard access.`
-        : `${reviewer.name} returned ${employee.name}'s onboarding for changes.`,
+        ? `${review.reviewedByName} approved ${employee.name}'s onboarding and opened dashboard access.`
+        : `${review.reviewedByName} returned ${employee.name}'s onboarding for changes.`,
       metadata: { employeeId: employee.id, decision: review.decision }
     });
     await this.persist();

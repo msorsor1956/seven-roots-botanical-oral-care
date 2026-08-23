@@ -13,6 +13,7 @@ import { createZohoInventory, ZohoApiError, ZohoConfigurationError } from "./zoh
 import { createZohoOAuthManager, ZohoOAuthError } from "./zoho-oauth.js";
 import { createWhatsAppService } from "./whatsapp.js";
 import { createWorkFileStorage, WorkFileError } from "./work-files.js";
+import { employeeTrainingPdf, employeeTrainingPdfName } from "./training-document.js";
 import {
   StaffAccessError,
   StaffValidationError,
@@ -143,10 +144,13 @@ const safeStaticPath = (rootDir, pathname) => {
     ["/admin", "admin.html"],
     ["/admin.html", "admin.html"],
     ["/admin.css", "admin.css"],
+    ["/admin-training.css", "admin-training.css"],
+    ["/admin-training-form.css", "admin-training-form.css"],
     ["/admin.js", "admin.js"],
     ["/staff", "staff.html"],
     ["/staff.html", "staff.html"],
     ["/staff.css", "staff.css"],
+    ["/staff-training.css", "staff-training.css"],
     ["/staff.js", "staff.js"],
     ["/order-success", "order-success.html"],
     ["/order-success.html", "order-success.html"],
@@ -188,6 +192,17 @@ const serveFile = async (request, response, filePath, status = 200) => {
     if (error.code === "ENOENT") return false;
     throw error;
   }
+};
+
+const servePrivatePdfBuffer = (response) => {
+  response.writeHead(200, {
+    "Content-Type": "application/pdf",
+    "Content-Length": employeeTrainingPdf.length,
+    "Content-Disposition": `attachment; filename*=UTF-8''${encodeURIComponent(employeeTrainingPdfName)}`,
+    "Cache-Control": "private, no-store",
+    "X-Content-Type-Options": "nosniff"
+  });
+  response.end(employeeTrainingPdf);
 };
 
 export async function createApplication(options = {}) {
@@ -718,6 +733,12 @@ export async function createApplication(options = {}) {
         return;
       }
 
+      if (request.method === "GET" && pathname === "/api/v1/staff/onboarding/document") {
+        await requireStaff(request);
+        servePrivatePdfBuffer(response);
+        return;
+      }
+
       if (request.method === "POST" && pathname.startsWith("/api/v1/staff/onboarding/modules/") && pathname.endsWith("/complete")) {
         const authentication = await requireStaffMutation(request, "profile.update", { allowOnboarding: true });
         const moduleId = pathname.slice("/api/v1/staff/onboarding/modules/".length, -"/complete".length);
@@ -960,6 +981,40 @@ export async function createApplication(options = {}) {
         }
         if (request.method === "GET" && pathname === "/api/v1/admin/staff") {
           sendJson(response, 200, { data: store.listStaffUsers() });
+          return;
+        }
+        if (request.method === "GET" && pathname === "/api/v1/admin/onboarding") {
+          sendJson(response, 200, { data: store.adminOnboardingReviews() });
+          return;
+        }
+        if (request.method === "GET" && pathname === "/api/v1/admin/onboarding/document") {
+          servePrivatePdfBuffer(response);
+          return;
+        }
+        if (request.method === "GET" && pathname.startsWith("/api/v1/admin/files/")) {
+          const fileId = pathname.slice("/api/v1/admin/files/".length);
+          const file = store.staffFile(adminActor, fileId);
+          const stored = await workFiles.inspect(file);
+          const inline = file.family === "photo" || file.family === "video";
+          response.writeHead(200, {
+            "Content-Type": file.mimeType,
+            "Content-Length": stored.size,
+            "Content-Disposition": `${inline ? "inline" : "attachment"}; filename*=UTF-8''${encodeURIComponent(file.originalName)}`,
+            "Cache-Control": "private, no-store",
+            "X-Content-Type-Options": "nosniff"
+          });
+          createReadStream(stored.filePath).pipe(response);
+          return;
+        }
+        if (request.method === "POST" && pathname.startsWith("/api/v1/admin/onboarding/") && pathname.endsWith("/review")) {
+          const employeeId = pathname.slice("/api/v1/admin/onboarding/".length, -"/review".length);
+          const onboarding = await store.reviewStaffOnboarding(adminActor, employeeId, await readJson(request));
+          sendJson(response, 200, {
+            data: onboarding,
+            message: onboarding.status === "approved"
+              ? "Employee training approved. Dashboard access is open."
+              : "Training returned to the employee for corrections."
+          });
           return;
         }
         if (request.method === "POST" && pathname === "/api/v1/admin/staff") {

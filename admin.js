@@ -20,6 +20,7 @@
   let staffUsers = [];
   let staffRoles = [];
   let adminTasks = [];
+  let onboardingRecords = [];
 
   const normalizeAdminKey = (value) => {
     const normalized = String(value || '').replace(/[\u200B-\u200D\uFEFF]/gu, '').trim();
@@ -49,6 +50,23 @@
       throw error;
     }
     return payload.data;
+  };
+
+  const downloadPrivateFile = async (path, filename) => {
+    const response = await fetch(path, { headers: { authorization: `Bearer ${apiKey}` } });
+    if (!response.ok) {
+      const payload = await response.json().catch(() => ({}));
+      throw new Error(payload.error?.message || 'The private file could not be downloaded.');
+    }
+    const blob = await response.blob();
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement('a');
+    link.href = url;
+    link.download = filename;
+    document.body.append(link);
+    link.click();
+    link.remove();
+    setTimeout(() => URL.revokeObjectURL(url), 1000);
   };
 
   const uploadTaskFile = async (taskId, file) => {
@@ -685,6 +703,126 @@
     input.select();
   };
 
+  const renderOnboardingRecords = (records) => {
+    onboardingRecords = records;
+    const list = qs('[data-admin-training-list]');
+    const status = qs('[data-admin-training-status]');
+    const pending = records.filter((record) => record.status === 'pending_review').length;
+    const approved = records.filter((record) => record.status === 'approved').length;
+    qs('[data-training-summary]').textContent = `${pending} awaiting review · ${approved} approved · ${records.length} employees`;
+    list.replaceChildren();
+    if (!records.length) {
+      const empty = document.createElement('p');
+      empty.className = 'empty';
+      empty.textContent = 'No employees currently require onboarding training.';
+      list.append(empty);
+      return;
+    }
+    const fileButton = (label, url, filename) => {
+      const button = document.createElement('button');
+      button.type = 'button';
+      button.className = 'panel-link training-evidence-button';
+      button.textContent = label;
+      button.disabled = !url;
+      button.addEventListener('click', () => {
+        const fileId = String(url || '').split('/').pop();
+        downloadPrivateFile(`/api/v1/admin/files/${encodeURIComponent(fileId)}`, filename)
+          .catch((error) => setStatus(status, error.message, true));
+      });
+      return button;
+    };
+    records.forEach((record) => {
+      const card = document.createElement('article');
+      card.className = `admin-training-card is-${record.status}`;
+      const identity = document.createElement('div');
+      identity.className = 'admin-training-identity';
+      const meta = document.createElement('small');
+      meta.textContent = `${record.user.employeeNumber} · ${record.user.roleLabel}`;
+      const name = document.createElement('h3');
+      name.textContent = record.user.name;
+      const location = document.createElement('p');
+      location.textContent = `${record.user.locations.map((value) => value === 'us' ? 'U.S.' : 'Liberia').join(', ')} · ${record.user.email}`;
+      const state = document.createElement('span');
+      state.className = `order-status${statusIsAlert(record.status) ? ' is-alert' : ''}`;
+      state.textContent = statusLabel(record.status);
+      identity.append(meta, name, location, state);
+
+      const progress = document.createElement('div');
+      progress.className = 'admin-training-progress';
+      const progressTitle = document.createElement('strong');
+      progressTitle.textContent = `${record.completedModules} of ${record.totalModules} modules complete`;
+      const meter = document.createElement('div');
+      meter.className = 'admin-training-progress-meter';
+      const fill = document.createElement('span');
+      fill.style.width = `${Math.round((record.completedModules / Math.max(1, record.totalModules)) * 100)}%`;
+      meter.append(fill);
+      const signed = document.createElement('p');
+      signed.textContent = record.signedAt ? `Signed by ${record.signedName} on ${record.signedDate}` : 'Employee acknowledgment not yet signed.';
+      const submitted = document.createElement('p');
+      submitted.textContent = record.submittedAt ? `Submitted ${formatDate(record.submittedAt)}` : 'Not submitted to management.';
+      const evidence = document.createElement('div');
+      evidence.className = 'admin-training-links';
+      evidence.append(
+        fileButton('Employee photo', record.employeePhotoUrl, `${record.user.employeeNumber}-photo`),
+        fileButton('Employee signature', record.employeeSignatureUrl, `${record.user.employeeNumber}-signature`)
+      );
+      progress.append(progressTitle, meter, signed, submitted, evidence);
+
+      const review = document.createElement('form');
+      review.className = 'admin-training-review';
+      if (record.status === 'pending_review') {
+        const approverLabel = document.createElement('label');
+        approverLabel.textContent = 'Approver name';
+        const approver = document.createElement('input');
+        approver.value = 'SEVEN ROOTS Owner Admin';
+        approver.maxLength = 120;
+        approver.required = true;
+        approverLabel.append(approver);
+        const noteLabel = document.createElement('label');
+        noteLabel.textContent = 'Review note';
+        const note = document.createElement('textarea');
+        note.maxLength = 1200;
+        note.placeholder = 'Approval note or corrections required';
+        noteLabel.append(note);
+        const actions = document.createElement('div');
+        actions.className = 'admin-training-review-actions';
+        const approve = document.createElement('button');
+        approve.type = 'button';
+        approve.textContent = 'Approve training';
+        const changes = document.createElement('button');
+        changes.type = 'button';
+        changes.className = 'secondary';
+        changes.textContent = 'Request changes';
+        const submitDecision = async (decision) => {
+          approve.disabled = true; changes.disabled = true;
+          try {
+            await api(`/api/v1/admin/onboarding/${encodeURIComponent(record.user.id)}/review`, {
+              method: 'POST', body: { decision, reviewNote: note.value, reviewedByName: approver.value }
+            });
+            await loadDashboard();
+            setStatus(status, decision === 'approve' ? `${record.user.name}'s training was approved.` : `${record.user.name}'s training was returned for corrections.`);
+          } catch (error) {
+            setStatus(status, error.message, true);
+            approve.disabled = false; changes.disabled = false;
+          }
+        };
+        approve.addEventListener('click', () => submitDecision('approve'));
+        changes.addEventListener('click', () => submitDecision('request_changes'));
+        actions.append(approve, changes);
+        review.append(approverLabel, noteLabel, actions);
+      } else {
+        const result = document.createElement('div');
+        result.className = record.status === 'approved' ? 'admin-training-approved' : 'admin-training-pending';
+        result.textContent = record.review
+          ? `${record.review.reviewedByName} · ${formatDate(record.review.reviewedAt)}${record.review.note ? ` · ${record.review.note}` : ''}`
+          : 'Waiting for the employee to finish and submit training.';
+        review.append(result);
+      }
+      card.append(identity, progress, review);
+      list.append(card);
+    });
+  };
+
   const renderStaff = (users, roles) => {
     staffUsers = users;
     staffRoles = roles;
@@ -857,7 +995,7 @@
 
   const loadDashboard = async () => {
     setStatus(dashboardStatus, 'Refreshing private commerce data…');
-    const [summary, financialReport, zohoStatus, emailStatus, whatsappStatus, inventory, payments, orders, waitlist, inquiries, staff, roles, tasks] = await Promise.all([
+    const [summary, financialReport, zohoStatus, emailStatus, whatsappStatus, inventory, payments, orders, waitlist, inquiries, staff, roles, tasks, onboarding] = await Promise.all([
       api('/api/v1/admin/summary'),
       api('/api/v1/admin/financial-report'),
       api('/api/v1/admin/zoho/status'),
@@ -870,7 +1008,8 @@
       api('/api/v1/admin/inquiries?limit=500'),
       api('/api/v1/admin/staff'),
       api('/api/v1/admin/staff/roles'),
-      api('/api/v1/admin/tasks?limit=500')
+      api('/api/v1/admin/tasks?limit=500'),
+      api('/api/v1/admin/onboarding')
     ]);
     collections = { orders, payments, inventory, waitlist, inquiries };
     renderSummary(summary);
@@ -885,6 +1024,7 @@
     renderInquiries(inquiries);
     renderStaff(staff, roles);
     renderAdminTasks(tasks);
+    renderOnboardingRecords(onboarding);
     setStatus(dashboardStatus, `Updated ${new Date().toLocaleTimeString()}.`);
   };
 
@@ -925,6 +1065,11 @@
   });
 
   qs('[data-refresh]').addEventListener('click', () => loadDashboard().catch((error) => setStatus(dashboardStatus, error.message, true)));
+
+  qs('[data-admin-training-document]').addEventListener('click', () => {
+    downloadPrivateFile('/api/v1/admin/onboarding/document', 'SEVEN_ROOTS_Employee_Training_Acknowledgment.pdf')
+      .catch((error) => setStatus(qs('[data-admin-training-status]'), error.message, true));
+  });
 
   const staffForm = qs('[data-staff-form]');
   const staffRoleSelect = qs('[data-staff-role]');

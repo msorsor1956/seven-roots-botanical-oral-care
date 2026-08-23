@@ -8,6 +8,8 @@
   <title>SEVEN ROOTS | Private Studio</title>
   <link rel="icon" href="assets/seven-roots-mark.svg" type="image/svg+xml">
   <link rel="stylesheet" href="admin.css?v=36383a6">
+  <link rel="stylesheet" href="admin-training.css">
+  <link rel="stylesheet" href="admin-training-form.css">
 </head>
 <body>
   <a class="skip" href="#admin-main">Skip to dashboard</a>
@@ -93,6 +95,19 @@
             </div>
           </div>
         </div>
+      </section>
+
+      <section class="data-panel training-admin-panel">
+        <div class="panel-heading">
+          <div><p class="eyebrow">Training compliance</p><h2>Employee training review</h2></div>
+          <div class="training-admin-actions">
+            <span class="training-summary" data-training-summary>Loading training records</span>
+            <button type="button" class="panel-link training-document-button" data-admin-training-document>Download master PDF</button>
+          </div>
+        </div>
+        <p class="staff-help">Review every employee's four-module training record, signed acknowledgment, photo, and signature. Admin approval is digitally authorized by the private Admin API key and immediately opens the employee dashboard.</p>
+        <div class="admin-training-list" data-admin-training-list><p class="empty">Loading employee training records...</p></div>
+        <p class="staff-form-status" data-admin-training-status role="status" aria-live="polite"></p>
       </section>
 
       <section class="data-panel work-queue-panel">

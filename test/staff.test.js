@@ -498,6 +498,71 @@ test("onboarding corrections keep operations locked until a signed management ap
   });
 });
 
+test("admin reviews every employee training record, downloads the PDF, and approves dashboard access", async () => {
+  await withServer(async (baseUrl) => {
+    const invited = await inviteEmployee(baseUrl, {
+      name: "Korto Dennis",
+      email: "korto.training@example.com",
+      role: "us_fulfillment",
+      country: "United States",
+      locations: ["us"]
+    });
+    const employee = await acceptInvitation(baseUrl, invited.token);
+    for (const [kind, name, contents] of [
+      ["profile_photo", "korto-photo.png", "employee-photo"],
+      ["signature", "korto-signature.png", "employee-signature"]
+    ]) {
+      const uploaded = await staffUpload(baseUrl, `/api/v1/staff/profile/files/${kind}`, employee, {
+        name, type: "image/png", contents: Buffer.from(contents)
+      });
+      assert.equal(uploaded.status, 201, await uploaded.text());
+    }
+    for (const [moduleId, answer] of Object.entries(onboardingAnswers)) {
+      const completed = await staffFetch(baseUrl, `/api/v1/staff/onboarding/modules/${moduleId}/complete`, employee, {
+        method: "POST", body: { answer }
+      });
+      assert.equal(completed.status, 200, await completed.text());
+    }
+    const submitted = await staffFetch(baseUrl, "/api/v1/staff/onboarding/submit", employee, {
+      method: "POST",
+      body: {
+        signedName: employee.user.name,
+        signedDate: new Date().toISOString().slice(0, 10),
+        acknowledgments: ["truthful", "safety", "policy"]
+      }
+    });
+    assert.equal(submitted.status, 200, await submitted.text());
+
+    const queue = await fetch(`${baseUrl}/api/v1/admin/onboarding`, { headers: adminHeaders });
+    const queuePayload = await queue.json();
+    assert.equal(queue.status, 200, JSON.stringify(queuePayload));
+    const record = queuePayload.data.find((item) => item.user.id === employee.user.id);
+    assert.equal(record.status, "pending_review");
+    assert.equal(record.completedModules, 4);
+    assert.ok(record.employeePhotoUrl);
+    assert.ok(record.employeeSignatureUrl);
+
+    const adminPdf = await fetch(`${baseUrl}/api/v1/admin/onboarding/document`, { headers: adminHeaders });
+    assert.equal(adminPdf.status, 200, await adminPdf.text());
+    assert.equal(adminPdf.headers.get("content-type"), "application/pdf");
+    const staffPdf = await staffFetch(baseUrl, "/api/v1/staff/onboarding/document", employee);
+    assert.equal(staffPdf.status, 200, await staffPdf.text());
+
+    const approved = await fetch(`${baseUrl}/api/v1/admin/onboarding/${employee.user.id}/review`, json("POST", {
+      decision: "approve",
+      reviewNote: "All four modules and the signed employee record were reviewed.",
+      reviewedByName: "Massayan Sorsor"
+    }, adminHeaders));
+    const approvedPayload = await approved.json();
+    assert.equal(approved.status, 200, JSON.stringify(approvedPayload));
+    assert.equal(approvedPayload.data.status, "approved");
+    assert.equal(approvedPayload.data.review.reviewedByName, "Massayan Sorsor");
+    assert.equal(approvedPayload.data.review.authorizationMethod, "admin_api_key");
+    const workspace = await staffFetch(baseUrl, "/api/v1/staff/workspace", employee);
+    assert.equal(workspace.status, 200, await workspace.text());
+  });
+});
+
 test("task evidence requires manager approval with protected files, photo, signature, contacts, and WhatsApp updates", async () => {
   const whatsappCalls = [];
   const whatsapp = {

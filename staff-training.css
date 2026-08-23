@@ -1,0 +1,18 @@
+.training-pdf-link {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 38px;
+  margin-top: 8px;
+  padding: 0 12px;
+  border: 1px solid rgba(255,255,255,.24);
+  border-radius: 7px;
+  color: #fff;
+  font-size: 8px;
+  font-weight: 900;
+  text-transform: uppercase;
+  letter-spacing: .07em;
+  text-decoration: none;
+}
+.training-pdf-link:hover,
+.training-pdf-link:focus-visible { border-color: #efd087; color: #efd087; }

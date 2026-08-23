@@ -1,0 +1,11 @@
+.admin-training-review input,
+.admin-training-review textarea {
+  width: 100%;
+  padding: 10px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: #fff;
+}
+.admin-training-review textarea { min-height: 68px; resize: vertical; }
+.training-evidence-button { cursor: pointer; }
+.training-evidence-button:disabled { opacity: .45; cursor: not-allowed; }
