@@ -1432,7 +1432,7 @@
       await api('/api/v1/staff/auth/temporary-password/request', {
         method: 'POST', body: { email: form.get('email') }
       });
-      setStatus(qs('[data-temporary-password-status]'), 'If this email matches an active staff account, a one-time temporary password is on its way. Check your inbox and spam folder.');
+      setStatus(qs('[data-temporary-password-status]'), 'Check your email. If this address matches an active staff account, we sent a one-time temporary password. Also check your spam folder.');
     } catch (error) {
       setStatus(qs('[data-temporary-password-status]'), error.message, true);
     } finally { button.disabled = false; }
