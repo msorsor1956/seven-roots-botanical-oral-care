@@ -6,7 +6,7 @@ Production-ready storefront, Stripe payment flow, and backend for the **SEVEN RO
 
 [msorsor1956.github.io/seven-roots-botanical-oral-care](https://msorsor1956.github.io/seven-roots-botanical-oral-care/)
 
-Production: [seven-roots-botanical-oral-care-production.up.railway.app](https://seven-roots-botanical-oral-care-production.up.railway.app/)
+Production: [sevenroots.info](https://sevenroots.info/)
 
 The Railway deployment serves the frontend and API from one Node process. The GitHub Pages mirror sends its form requests to this production API.
 
@@ -34,7 +34,7 @@ The Railway deployment serves the frontend and API from one Node process. The Gi
 - Origin allowlist, body-size limits, security headers, and request IDs
 - Atomic private JSON storage with restrictive file permissions
 - API-key protected admin endpoints
-- Private `/admin` commerce dashboard with orders, inventory controls, financial reports, payment records, leads, and CSV export
+- Private `/admin` commerce dashboard with orders, inventory controls, financial reports, payment records, leads, CSV export, and cross-location task allocation
 - Individual employee accounts with automatically emailed, expiring one-time invitations, delivery records, password hashing, secure sessions, CSRF protection, lockout controls, and access deactivation
 - Role- and location-scoped `/staff` operations portal for Liberia warehouse, U.S. fulfillment, finance, support, audit, and ownership teams
 - Assigned work queues, two-person physical count approval, Liberia-to-U.S. transfer custody, paid-order fulfillment states, and append-only operational audit history
@@ -83,14 +83,14 @@ Configure these service variables:
 NODE_ENV=production
 DATA_DIR=/data
 ADMIN_API_KEY=<a long random secret>
-ALLOWED_ORIGINS=https://msorsor1956.github.io,https://seven-roots-botanical-oral-care-production.up.railway.app
-PUBLIC_BASE_URL=https://seven-roots-botanical-oral-care-production.up.railway.app
+ALLOWED_ORIGINS=https://sevenroots.info,https://www.sevenroots.info,https://msorsor1956.github.io,https://seven-roots-botanical-oral-care-production.up.railway.app
+PUBLIC_BASE_URL=https://sevenroots.info
 RESEND_API_KEY=<Resend server API key>
 EMAIL_FROM=SEVEN ROOTS <staff@your-verified-domain.example>
 EMAIL_REPLY_TO=<optional monitored reply address>
 MAX_TASK_FILE_MB=50
 ADMIN_CONTACT_NAME=SEVEN ROOTS Owner Admin
-ADMIN_CONTACT_EMAIL=<admin work email>
+ADMIN_CONTACT_EMAIL=hello@sevenroots.info
 ADMIN_CONTACT_PHONE=<admin phone>
 ADMIN_WHATSAPP_NUMBER=<international number beginning with +>
 WHATSAPP_ACCESS_TOKEN=<Meta system-user access token>
@@ -180,7 +180,7 @@ Invitation delivery uses Resend's server-side email API. First add and verify a 
 
 ### Run documented work and approvals
 
-Managers and owners create an operation from **Staff portal → My work**. Every operation requires a Scope of Work and an explicit evidence checklist. The creator can attach SOW/reference documents, photos, and video. The assigned employee claims or starts the work, uploads completion evidence, and submits a completion note. The task becomes **pending approval** and cannot be marked completed directly. A different authorized manager either requests changes or approves it. Approval records the manager's name, profile photo, signature image, note, and timestamp; the employee then sees a green completed seal.
+Admins create and allocate operations from **Admin → Operations task queue**. Liberia and U.S. managers can also create and assign tasks from **Staff portal → My work** within their permitted locations. Every operation requires a Scope of Work and an explicit evidence checklist. The creator can attach SOW/reference documents, photos, and video. The assigned employee claims or starts the work, uploads completion evidence, and submits a completion note. The task becomes **pending approval** and cannot be marked completed directly. A different authorized manager either requests changes or approves it. Approval records the manager's name, profile photo, signature image, note, and timestamp; the employee and admin dashboards then show the completed approval record.
 
 Work files are stored privately under `DATA_DIR/work-files` on the Railway volume. They are never served as public static assets: every download rechecks the staff session, task visibility, role, and location. Supported formats include PDF, Word, Excel, text/CSV, JPEG/PNG/WebP/HEIC, MP4/MOV/WebM. `MAX_TASK_FILE_MB` controls the per-file limit from 1–100 MB.
 

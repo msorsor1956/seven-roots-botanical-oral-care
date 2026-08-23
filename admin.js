@@ -8,11 +8,18 @@
   const loginStatus = qs('[data-login-status]');
   const dashboardStatus = qs('[data-dashboard-status]');
   const formatNames = { 'travel-sleeve': 'Travel Sleeve', 'daily-ritual': 'Daily Ritual', 'family-reserve': 'Family Reserve' };
+  const taskTypeNames = {
+    receiving: 'Receiving', quality: 'Quality control', packing: 'Packing', stock_count: 'Stock count',
+    transfer: 'Stock transfer', fulfillment: 'Order fulfillment', returns: 'Returns', support: 'Customer support',
+    finance: 'Finance', general: 'General operations'
+  };
+  const taskLocationNames = { liberia: 'Liberia warehouse', us: 'U.S. fulfillment', both: 'Both locations' };
   let apiKey = sessionStorage.getItem('seven-roots-admin-key') || '';
   let collections = { orders: [], payments: [], inventory: [], waitlist: [], inquiries: [] };
   let currentZohoStatus = { configured: false, enabled: false, inventoryAuthority: false, mappings: [] };
   let staffUsers = [];
   let staffRoles = [];
+  let adminTasks = [];
 
   const setStatus = (element, message, isError = false) => {
     element.textContent = message;
@@ -35,6 +42,24 @@
       error.details = payload.error?.details || {};
       throw error;
     }
+    return payload.data;
+  };
+
+  const uploadTaskFile = async (taskId, file) => {
+    const response = await fetch(`/api/v1/admin/tasks/${encodeURIComponent(taskId)}/files`, {
+      method: 'POST',
+      headers: {
+        authorization: `Bearer ${apiKey}`,
+        accept: 'application/json',
+        'content-type': file.type || 'application/octet-stream',
+        'x-file-name': file.name,
+        'x-file-kind': file.type === 'application/pdf' || /\.(docx?|xlsx?|csv|txt)$/iu.test(file.name) ? 'sow' : 'reference',
+        'x-file-phase': 'scope'
+      },
+      body: file
+    });
+    const payload = await response.json().catch(() => ({}));
+    if (!response.ok) throw new Error(payload.error?.message || `${file.name} could not be uploaded.`);
     return payload.data;
   };
 
@@ -256,6 +281,170 @@
     badge.title = status.configured
       ? `Task notifications use ${status.taskTemplate}.`
       : `Add ${(status.missingSettings || []).join(', ')} in Railway for automatic task notifications.`;
+  };
+
+  const populateTaskAssignees = (select, location, selected = '') => {
+    select.replaceChildren(new Option('Leave open to claim', ''));
+    staffUsers
+      .filter((user) => user.status === 'active' && (location === 'both' || user.locations.includes(location)))
+      .forEach((user) => select.append(new Option(`${user.name} · ${user.roleLabel}`, user.id)));
+    select.value = selected;
+  };
+
+  const renderAdminTasks = (tasks) => {
+    adminTasks = tasks;
+    const active = tasks.filter((task) => !['completed'].includes(task.status));
+    const pending = tasks.filter((task) => task.status === 'pending_approval');
+    qs('[data-admin-task-open]').textContent = active.length;
+    qs('[data-admin-task-pending]').textContent = pending.length;
+    qs('[data-admin-task-total]').textContent = `${tasks.length} task${tasks.length === 1 ? '' : 's'}`;
+
+    const list = qs('[data-admin-task-list]');
+    list.replaceChildren();
+    if (!tasks.length) {
+      const empty = document.createElement('div');
+      empty.className = 'task-empty-state';
+      const title = document.createElement('strong');
+      title.textContent = 'No operations tasks yet';
+      const copy = document.createElement('p');
+      copy.textContent = 'Create the first task and assign it to an active employee or manager.';
+      empty.append(title, copy);
+      list.append(empty);
+      return;
+    }
+
+    const personById = new Map(staffUsers.map((user) => [user.id, user]));
+    tasks.forEach((task) => {
+      const card = document.createElement('article');
+      card.className = `admin-task-card${task.status === 'completed' ? ' is-completed' : ''}`;
+
+      const header = document.createElement('header');
+      const identity = document.createElement('div');
+      const eyebrow = document.createElement('p');
+      eyebrow.className = 'task-card-eyebrow';
+      eyebrow.textContent = `${taskTypeNames[task.type] || statusLabel(task.type)} · ${taskLocationNames[task.location] || task.location}`;
+      const title = document.createElement('h4');
+      title.textContent = task.title;
+      identity.append(eyebrow, title);
+      const badges = document.createElement('div');
+      badges.className = 'admin-task-badges';
+      if (task.priority === 'urgent' && task.status !== 'completed') {
+        const urgent = document.createElement('span');
+        urgent.className = 'task-badge is-urgent';
+        urgent.textContent = 'Urgent';
+        badges.append(urgent);
+      }
+      const state = document.createElement('span');
+      state.className = `task-badge is-${task.status}`;
+      state.textContent = statusLabel(task.status);
+      badges.append(state);
+      header.append(identity, badges);
+
+      const scope = document.createElement('p');
+      scope.className = 'admin-task-scope';
+      scope.textContent = task.scopeOfWork || task.description || 'No Scope of Work was recorded.';
+
+      const assignee = personById.get(task.assignedTo);
+      const meta = document.createElement('dl');
+      meta.className = 'admin-task-meta';
+      [
+        ['Assigned to', assignee?.name || 'Open to claim'],
+        ['Created by', task.createdByName || 'Administration'],
+        ['Due', task.dueAt ? formatDate(task.dueAt) : 'No due date'],
+        ['Updated', formatDate(task.updatedAt)]
+      ].forEach(([label, value]) => {
+        const group = document.createElement('div');
+        const term = document.createElement('dt');
+        term.textContent = label;
+        const description = document.createElement('dd');
+        description.textContent = value;
+        group.append(term, description);
+        meta.append(group);
+      });
+
+      const evidence = document.createElement('div');
+      evidence.className = 'admin-task-evidence';
+      const evidenceLabel = document.createElement('strong');
+      evidenceLabel.textContent = 'Required evidence';
+      const evidenceItems = document.createElement('div');
+      (task.evidenceRequirements || []).forEach((item) => {
+        const tag = document.createElement('span');
+        const complete = (task.attachments || []).some((file) => file.phase === 'completion' && file.family === item);
+        tag.className = complete ? 'is-ready' : '';
+        tag.textContent = `${complete ? '✓ ' : ''}${statusLabel(item)}`;
+        evidenceItems.append(tag);
+      });
+      if (!(task.evidenceRequirements || []).length) evidenceItems.textContent = 'No evidence requirement';
+      evidence.append(evidenceLabel, evidenceItems);
+
+      const files = document.createElement('p');
+      files.className = 'admin-task-file-count';
+      const scopeFiles = (task.attachments || []).filter((file) => file.phase === 'scope').length;
+      const completionFiles = (task.attachments || []).filter((file) => file.phase === 'completion').length;
+      files.textContent = `${scopeFiles} SOW/reference file${scopeFiles === 1 ? '' : 's'} · ${completionFiles} completion file${completionFiles === 1 ? '' : 's'}`;
+
+      card.append(header, scope, meta, evidence, files);
+
+      if (task.status === 'pending_approval') {
+        const notice = document.createElement('div');
+        notice.className = 'task-approval-notice is-pending';
+        const noticeTitle = document.createElement('strong');
+        noticeTitle.textContent = 'Waiting for manager approval';
+        const noticeCopy = document.createElement('p');
+        noticeCopy.textContent = `${task.submittedByName || 'The assigned employee'} submitted this task ${formatDate(task.submittedAt)}. A different authorized manager must review the evidence in the staff portal.`;
+        notice.append(noticeTitle, noticeCopy);
+        card.append(notice);
+      } else if (task.status === 'completed' && task.approval) {
+        const notice = document.createElement('div');
+        notice.className = 'task-approval-notice is-approved';
+        const noticeTitle = document.createElement('strong');
+        noticeTitle.textContent = '✓ Approved and completed';
+        const noticeCopy = document.createElement('p');
+        noticeCopy.textContent = `${task.approval.approvedByName} approved this work ${formatDate(task.approval.approvedAt)}${task.approval.note ? ` · ${task.approval.note}` : ''}`;
+        notice.append(noticeTitle, noticeCopy);
+        card.append(notice);
+      } else {
+        const allocation = document.createElement('form');
+        allocation.className = 'task-allocation-form';
+        const assignLabel = document.createElement('label');
+        const assignText = document.createElement('span');
+        assignText.textContent = 'Allocate to';
+        const assignSelect = document.createElement('select');
+        assignSelect.setAttribute('aria-label', `Allocate ${task.title}`);
+        populateTaskAssignees(assignSelect, task.location, task.assignedTo);
+        assignLabel.append(assignText, assignSelect);
+        const priorityLabel = document.createElement('label');
+        const priorityText = document.createElement('span');
+        priorityText.textContent = 'Priority';
+        const prioritySelect = document.createElement('select');
+        prioritySelect.append(new Option('Normal', 'normal'), new Option('Urgent', 'urgent'));
+        prioritySelect.value = task.priority;
+        priorityLabel.append(priorityText, prioritySelect);
+        const save = document.createElement('button');
+        save.type = 'submit';
+        save.textContent = task.assignedTo ? 'Update allocation' : 'Assign task';
+        allocation.append(assignLabel, priorityLabel, save);
+        allocation.addEventListener('submit', async (event) => {
+          event.preventDefault();
+          save.disabled = true;
+          setStatus(qs('[data-admin-task-status]'), `Updating ${task.title}…`);
+          try {
+            await api(`/api/v1/admin/tasks/${encodeURIComponent(task.id)}`, {
+              method: 'PATCH',
+              body: { assignedTo: assignSelect.value, priority: prioritySelect.value }
+            });
+            await loadDashboard();
+            setStatus(qs('[data-admin-task-status]'), `${task.title} was allocated successfully.`);
+          } catch (error) {
+            setStatus(qs('[data-admin-task-status]'), error.message, true);
+            save.disabled = false;
+          }
+        });
+        card.append(allocation);
+      }
+
+      list.append(card);
+    });
   };
 
   const renderInventory = (items) => {
@@ -486,6 +675,9 @@
   const renderStaff = (users, roles) => {
     staffUsers = users;
     staffRoles = roles;
+    const taskAssignee = qs('[data-admin-task-assignee]');
+    const taskLocation = qs('[data-admin-task-location]');
+    if (taskAssignee && taskLocation) populateTaskAssignees(taskAssignee, taskLocation.value, taskAssignee.value);
     const roleById = new Map(roles.map((role) => [role.id, role]));
     const roleSelect = qs('[data-staff-role]');
     const selectedRole = roleSelect.value;
@@ -647,7 +839,7 @@
 
   const loadDashboard = async () => {
     setStatus(dashboardStatus, 'Refreshing private commerce data…');
-    const [summary, financialReport, zohoStatus, emailStatus, whatsappStatus, inventory, payments, orders, waitlist, inquiries, staff, roles] = await Promise.all([
+    const [summary, financialReport, zohoStatus, emailStatus, whatsappStatus, inventory, payments, orders, waitlist, inquiries, staff, roles, tasks] = await Promise.all([
       api('/api/v1/admin/summary'),
       api('/api/v1/admin/financial-report'),
       api('/api/v1/admin/zoho/status'),
@@ -659,7 +851,8 @@
       api('/api/v1/admin/waitlist?limit=500'),
       api('/api/v1/admin/inquiries?limit=500'),
       api('/api/v1/admin/staff'),
-      api('/api/v1/admin/staff/roles')
+      api('/api/v1/admin/staff/roles'),
+      api('/api/v1/admin/tasks?limit=500')
     ]);
     collections = { orders, payments, inventory, waitlist, inquiries };
     renderSummary(summary);
@@ -673,6 +866,7 @@
     renderWaitlist(waitlist);
     renderInquiries(inquiries);
     renderStaff(staff, roles);
+    renderAdminTasks(tasks);
     setStatus(dashboardStatus, `Updated ${new Date().toLocaleTimeString()}.`);
   };
 
@@ -747,6 +941,54 @@
     } catch (error) {
       const detail = Object.values(error.details || {})[0];
       setStatus(qs('[data-staff-form-status]'), detail || error.message, true);
+    } finally { button.disabled = false; }
+  });
+
+  const adminTaskForm = qs('[data-admin-task-form]');
+  const adminTaskLocation = qs('[data-admin-task-location]');
+  const adminTaskAssignee = qs('[data-admin-task-assignee]');
+  adminTaskLocation.addEventListener('change', () => populateTaskAssignees(adminTaskAssignee, adminTaskLocation.value));
+  adminTaskForm.addEventListener('submit', async (event) => {
+    event.preventDefault();
+    const button = qs('button[type="submit"]', adminTaskForm);
+    const form = new FormData(adminTaskForm);
+    const evidenceRequirements = form.getAll('evidenceRequirements').map(String);
+    const scopeFiles = form.getAll('scopeFiles').filter((file) => file instanceof File && file.size > 0);
+    if (!evidenceRequirements.length) {
+      setStatus(qs('[data-admin-task-status]'), 'Choose at least one completion evidence requirement.', true);
+      return;
+    }
+    button.disabled = true;
+    setStatus(qs('[data-admin-task-status]'), 'Creating and allocating the task…');
+    try {
+      const dueAtValue = String(form.get('dueAt') || '');
+      const data = await api('/api/v1/admin/tasks', {
+        method: 'POST',
+        body: {
+          title: form.get('title'),
+          location: form.get('location'),
+          type: form.get('type'),
+          priority: form.get('priority'),
+          assignedTo: form.get('assignedTo'),
+          scopeOfWork: form.get('scopeOfWork'),
+          evidenceRequirements,
+          dueAt: dueAtValue ? new Date(dueAtValue).toISOString() : null
+        }
+      });
+      const task = data.task || data;
+      let uploaded = 0;
+      for (const file of scopeFiles) {
+        await uploadTaskFile(task.id, file);
+        uploaded += 1;
+      }
+      adminTaskForm.reset();
+      adminTaskLocation.value = 'liberia';
+      populateTaskAssignees(adminTaskAssignee, 'liberia');
+      await loadDashboard();
+      setStatus(qs('[data-admin-task-status]'), `${task.title} was created${task.assignedTo ? ' and allocated' : ''}${uploaded ? ` with ${uploaded} work file${uploaded === 1 ? '' : 's'}` : ''}.`);
+    } catch (error) {
+      const detail = Object.values(error.details || {})[0];
+      setStatus(qs('[data-admin-task-status]'), detail || error.message, true);
     } finally { button.disabled = false; }
   });
 

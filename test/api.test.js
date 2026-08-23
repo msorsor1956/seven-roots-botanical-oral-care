@@ -104,10 +104,14 @@ test("serves the storefront and health endpoint", async () => {
     assert.match(await home.text(), /SEVEN ROOTS/);
     const health = await fetch(`${baseUrl}/api/v1/health`);
     assert.equal(health.status, 200);
-    assert.equal((await health.json()).status, "ok");
+    const healthPayload = await health.json();
+    assert.equal(healthPayload.status, "ok");
+    assert.equal(healthPayload.version, "1.8.1");
     const admin = await fetch(`${baseUrl}/admin`);
     assert.equal(admin.status, 200);
-    assert.match(await admin.text(), /PRIVATE STUDIO/);
+    const adminPage = await admin.text();
+    assert.match(adminPage, /PRIVATE STUDIO/);
+    assert.match(adminPage, /Operations task queue/);
     const missing = await fetch(`${baseUrl}/not-a-real-page`);
     assert.equal(missing.status, 404);
   });

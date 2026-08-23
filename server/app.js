@@ -363,7 +363,7 @@ export async function createApplication(options = {}) {
         sendJson(response, 200, {
           status: "ok",
           service: "seven-roots-api",
-          version: "1.7.0",
+          version: "1.8.1",
           storage: "file",
           payments: payments.configured ? "ready" : "configuration_required",
           inventoryIntegration: zoho.active ? "zoho_enabled" : "local",
@@ -733,6 +733,51 @@ export async function createApplication(options = {}) {
       if (pathname.startsWith("/api/v1/admin/")) {
         if (!adminApiKey) throw new HttpError(503, "admin_not_configured", "Admin access has not been configured.");
         if (!secureEqual(extractBearer(request), adminApiKey)) throw new HttpError(401, "unauthorized", "A valid admin API key is required.");
+        if (request.method === "GET" && pathname === "/api/v1/admin/tasks") {
+          sendJson(response, 200, { data: store.staffTasks(adminActor, url.searchParams.get("limit")) });
+          return;
+        }
+        if (request.method === "POST" && pathname === "/api/v1/admin/tasks") {
+          const task = await store.createStaffTask(adminActor, await readJson(request));
+          const notification = task.assignedTo ? await deliverTaskWhatsApp(task, "assigned") : null;
+          sendJson(response, 201, {
+            data: { task, notification },
+            message: "Task created and added to the staff work queue for manager oversight."
+          });
+          return;
+        }
+        if (request.method === "POST" && pathname.startsWith("/api/v1/admin/tasks/") && pathname.endsWith("/files")) {
+          const rate = staffFileLimiter(request);
+          if (!rate.allowed) throw new HttpError(429, "rate_limited", "Too many file uploads. Try again later.", { retryAfter: rate.retryAfter });
+          const taskId = pathname.slice("/api/v1/admin/tasks/".length, -"/files".length);
+          const kind = cleanStaffText(request.headers["x-file-kind"], 30).toLowerCase();
+          const phase = cleanStaffText(request.headers["x-file-phase"], 20).toLowerCase();
+          let file;
+          try {
+            file = await workFiles.save(request, {
+              scope: "tasks",
+              scopeId: taskId,
+              kind,
+              originalName: request.headers["x-file-name"]
+            });
+            const task = await store.attachStaffTaskFile(adminActor, taskId, file, phase);
+            sendJson(response, 201, { data: task, message: "Task work file uploaded securely." });
+          } catch (error) {
+            if (file) await workFiles.remove(file);
+            throw error;
+          }
+          return;
+        }
+        if (request.method === "PATCH" && pathname.startsWith("/api/v1/admin/tasks/")) {
+          const taskId = pathname.slice("/api/v1/admin/tasks/".length);
+          const input = await readJson(request);
+          const task = await store.updateStaffTask(adminActor, taskId, input);
+          const notification = Object.hasOwn(input, "assignedTo") && task.assignedTo
+            ? await deliverTaskWhatsApp(task, "assigned")
+            : null;
+          sendJson(response, 200, { data: { task, notification }, message: "Task allocation updated." });
+          return;
+        }
         if (request.method === "GET" && pathname === "/api/v1/admin/email/status") {
           sendJson(response, 200, { data: email.status() });
           return;

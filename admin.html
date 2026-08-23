@@ -94,6 +94,42 @@
         </div>
       </section>
 
+      <section class="data-panel work-queue-panel">
+        <div class="panel-heading">
+          <div><p class="eyebrow">Work allocation</p><h2>Operations task queue</h2></div>
+          <div class="task-queue-summary" aria-label="Task status summary">
+            <span><b data-admin-task-open>0</b> active</span>
+            <span><b data-admin-task-pending>0</b> awaiting approval</span>
+          </div>
+        </div>
+        <p class="task-help">Create and assign work to an employee or manager. Employees submit required evidence through the staff portal; an authorized manager reviews, signs, and approves completion.</p>
+        <div class="admin-task-layout">
+          <form class="admin-task-form" data-admin-task-form>
+            <div class="task-form-heading"><h3>Create and allocate task</h3><small>Required fields are marked</small></div>
+            <label class="task-title-field"><span>Task title *</span><input name="title" required minlength="3" maxlength="140" placeholder="Inspect export packing run"></label>
+            <label><span>Location *</span><select name="location" data-admin-task-location required><option value="liberia">Liberia warehouse</option><option value="us">U.S. fulfillment</option><option value="both">Both locations</option></select></label>
+            <label><span>Work type *</span><select name="type" required><option value="general">General operations</option><option value="receiving">Receiving</option><option value="quality">Quality control</option><option value="packing">Packing</option><option value="stock_count">Stock count</option><option value="transfer">Stock transfer</option><option value="fulfillment">Order fulfillment</option><option value="returns">Returns</option><option value="support">Customer support</option><option value="finance">Finance</option></select></label>
+            <label><span>Priority *</span><select name="priority" required><option value="normal">Normal</option><option value="urgent">Urgent</option></select></label>
+            <label><span>Due date</span><input name="dueAt" type="datetime-local"></label>
+            <label class="task-assignee-field"><span>Assign to</span><select name="assignedTo" data-admin-task-assignee><option value="">Leave open to claim</option></select></label>
+            <label class="task-scope-field"><span>Scope of Work (SOW) *</span><textarea name="scopeOfWork" required minlength="10" maxlength="5000" placeholder="Define the work, standards, deliverables, and completion conditions."></textarea></label>
+            <fieldset class="task-evidence-field">
+              <legend>Required completion evidence</legend>
+              <label><input type="checkbox" name="evidenceRequirements" value="document" checked> Document</label>
+              <label><input type="checkbox" name="evidenceRequirements" value="photo" checked> Photos</label>
+              <label><input type="checkbox" name="evidenceRequirements" value="video"> Video</label>
+            </fieldset>
+            <label class="task-files-field"><span>SOW and reference files</span><input name="scopeFiles" type="file" accept=".pdf,.doc,.docx,.xls,.xlsx,.txt,.csv,image/*,video/mp4,video/webm,video/quicktime" multiple></label>
+            <button type="submit">Create and allocate</button>
+            <p class="admin-task-status" data-admin-task-status role="status" aria-live="polite"></p>
+          </form>
+          <div class="admin-task-board">
+            <div class="task-board-heading"><h3>Current assignments</h3><span data-admin-task-total>0 tasks</span></div>
+            <div class="admin-task-list" data-admin-task-list><p class="empty">Loading work queue…</p></div>
+          </div>
+        </div>
+      </section>
+
       <section class="data-panel zoho-panel">
         <div class="panel-heading">
           <div><p class="eyebrow">Warehouse network</p><h2>Zoho Inventory bridge</h2></div>

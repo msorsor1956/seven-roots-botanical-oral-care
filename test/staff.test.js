@@ -290,6 +290,120 @@ test("task evidence requires manager approval with protected files, photo, signa
   }, { whatsapp });
 });
 
+test("admin allocates tasks while location managers create and approve employee work", async () => {
+  await withServer(async (baseUrl) => {
+    const managerInvite = await inviteEmployee(baseUrl, {
+      name: "Samuel Cooper",
+      email: "samuel.manager@example.com",
+      role: "liberia_manager",
+      country: "Liberia",
+      locations: ["liberia"]
+    });
+    const manager = await acceptInvitation(baseUrl, managerInvite.token);
+    const workerInvite = await inviteEmployee(baseUrl, {
+      name: "Martha Kromah",
+      email: "martha.operations@example.com",
+      role: "liberia_staff",
+      country: "Liberia",
+      locations: ["liberia"],
+      managerId: manager.user.id
+    });
+    const worker = await acceptInvitation(baseUrl, workerInvite.token);
+
+    const managerPhoto = await staffUpload(baseUrl, "/api/v1/staff/profile/files/profile_photo", manager, {
+      name: "manager.png", type: "image/png", contents: Buffer.from("manager-photo")
+    });
+    assert.equal(managerPhoto.status, 201, await managerPhoto.text());
+    const managerSignature = await staffUpload(baseUrl, "/api/v1/staff/profile/files/signature", manager, {
+      name: "manager-signature.png", type: "image/png", contents: Buffer.from("manager-signature")
+    });
+    assert.equal(managerSignature.status, 201, await managerSignature.text());
+
+    const created = await fetch(`${baseUrl}/api/v1/admin/tasks`, json("POST", {
+      title: "Prepare export batch records",
+      location: "liberia",
+      type: "quality",
+      priority: "urgent",
+      scopeOfWork: "Prepare the export batch record and attach a signed inspection document.",
+      evidenceRequirements: ["document"]
+    }, adminHeaders));
+    const createdPayload = await created.json();
+    assert.equal(created.status, 201, JSON.stringify(createdPayload));
+    const task = createdPayload.data.task;
+    assert.equal(task.createdByName, "Owner admin");
+    assert.equal(task.assignedTo, "");
+
+    const allocated = await fetch(`${baseUrl}/api/v1/admin/tasks/${task.id}`, json("PATCH", {
+      assignedTo: worker.user.id,
+      priority: "urgent"
+    }, adminHeaders));
+    const allocatedPayload = await allocated.json();
+    assert.equal(allocated.status, 200, JSON.stringify(allocatedPayload));
+    assert.equal(allocatedPayload.data.task.assignedTo, worker.user.id);
+
+    const scopeFile = await fetch(`${baseUrl}/api/v1/admin/tasks/${task.id}/files`, {
+      method: "POST",
+      headers: {
+        authorization: adminHeaders.authorization,
+        "content-type": "application/pdf",
+        "x-file-name": "export-batch-sow.pdf",
+        "x-file-kind": "sow",
+        "x-file-phase": "scope"
+      },
+      body: Buffer.from("admin-sow")
+    });
+    assert.equal(scopeFile.status, 201, await scopeFile.text());
+
+    const adminQueue = await fetch(`${baseUrl}/api/v1/admin/tasks`, { headers: adminHeaders });
+    const adminQueuePayload = await adminQueue.json();
+    assert.equal(adminQueue.status, 200);
+    assert.equal(adminQueuePayload.data.find((item) => item.id === task.id).attachments.length, 1);
+
+    const managerCreated = await staffFetch(baseUrl, "/api/v1/staff/tasks", manager, {
+      method: "POST",
+      body: {
+        title: "Confirm drying room records",
+        location: "liberia",
+        type: "quality",
+        priority: "normal",
+        assignedTo: worker.user.id,
+        scopeOfWork: "Review the drying room log and report any missing temperature entries.",
+        evidenceRequirements: ["photo"]
+      }
+    });
+    const managerCreatedPayload = await managerCreated.json();
+    assert.equal(managerCreated.status, 201, JSON.stringify(managerCreatedPayload));
+    assert.equal(managerCreatedPayload.data.task.createdBy, manager.user.id);
+    assert.equal(managerCreatedPayload.data.task.assignedTo, worker.user.id);
+
+    const started = await staffFetch(baseUrl, `/api/v1/staff/tasks/${task.id}`, worker, {
+      method: "PATCH", body: { status: "in_progress" }
+    });
+    assert.equal(started.status, 200, await started.text());
+    const evidence = await staffUpload(baseUrl, `/api/v1/staff/tasks/${task.id}/files`, worker, {
+      name: "signed-inspection.pdf",
+      type: "application/pdf",
+      kind: "document",
+      phase: "completion",
+      contents: Buffer.from("signed-inspection")
+    });
+    assert.equal(evidence.status, 201, await evidence.text());
+    const submitted = await staffFetch(baseUrl, `/api/v1/staff/tasks/${task.id}/submit`, worker, {
+      method: "POST", body: { submissionNote: "The signed export record is attached." }
+    });
+    assert.equal(submitted.status, 200, await submitted.text());
+
+    const approved = await staffFetch(baseUrl, `/api/v1/staff/tasks/${task.id}/review`, manager, {
+      method: "POST", body: { decision: "approve", reviewNote: "Export record verified." }
+    });
+    const approvedPayload = await approved.json();
+    assert.equal(approved.status, 200, JSON.stringify(approvedPayload));
+    assert.equal(approvedPayload.data.task.status, "completed");
+    assert.equal(approvedPayload.data.task.approval.approvedBy, manager.user.id);
+    assert.equal(approvedPayload.data.task.approval.approvedByName, "Samuel Cooper");
+  });
+});
+
 test("staff invitations create secure individual sessions and enforce Liberia role boundaries", async () => {
   await withServer(async (baseUrl) => {
     const staffPage = await fetch(`${baseUrl}/staff`);

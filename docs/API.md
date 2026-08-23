@@ -178,6 +178,10 @@ The owner bootstrap key manages individual staff accounts. Creating or replacing
 - `POST /api/v1/admin/staff`
 - `PATCH /api/v1/admin/staff/:userId`
 - `POST /api/v1/admin/staff/:userId/invitations`
+- `GET /api/v1/admin/tasks?limit=500`
+- `POST /api/v1/admin/tasks`
+- `PATCH /api/v1/admin/tasks/:taskId`
+- `POST /api/v1/admin/tasks/:taskId/files`
 - `GET /api/v1/admin/audit?limit=200`
 
 Create and invite an employee:
@@ -201,6 +205,12 @@ A successful create response includes `delivery.status: "sent"`, the provider na
 `GET /api/v1/admin/email/status` reports whether `RESEND_API_KEY`, a valid `EMAIL_FROM`, and the optional `EMAIL_REPLY_TO` are ready. Secret values are never returned. `PUBLIC_BASE_URL` supplies the trusted activation-link origin in production.
 
 Available roles are `owner`, `liberia_manager`, `liberia_staff`, `us_manager`, `us_fulfillment`, `finance`, `customer_support`, and `auditor`. Each role has a fixed backend permission set and permitted location assignment. Deactivating a user revokes every active session.
+
+### Admin task allocation
+
+The owner bootstrap key can create a task, leave it open to claim, or allocate it to any active employee whose location matches the operation. Admin task creation accepts the same `title`, `location`, `type`, `priority`, `assignedTo`, `dueAt`, `scopeOfWork`, and `evidenceRequirements` fields as manager task creation. `PATCH /api/v1/admin/tasks/:taskId` changes the assignee or priority while work remains active. Scope files use the raw upload headers described below with `X-File-Phase: scope`.
+
+Admin allocation does not bypass staff approval. The assigned employee must submit the required evidence, and a different authorized manager completes the review from `/staff`. Liberia and U.S. manager roles can also create and allocate tasks inside their assigned location and have `tasks.approve` for submitted work.
 
 ## Staff authentication and operations
 
