@@ -136,6 +136,31 @@
     const completed = onboarding.completedModuleIds.includes(module.id);
     const locked = onboarding.status === 'pending_review';
 
+    const documentBar = document.createElement('div');
+    documentBar.className = 'controlled-document';
+    const documentIdentity = document.createElement('div');
+    const documentLabel = document.createElement('span');
+    documentLabel.textContent = 'Controlled onboarding document';
+    const documentNumber = document.createElement('strong');
+    documentNumber.textContent = module.documentNumber || `SR-TRN-${String(module.order).padStart(3, '0')}`;
+    documentIdentity.append(documentLabel, documentNumber);
+    const documentMeta = document.createElement('dl');
+    [['Revision', module.revision || '1.0'], ['Effective', module.effectiveDate || 'Current'], ['Owner', module.owner || 'SEVEN ROOTS Management']].forEach(([term, value]) => {
+      const group = document.createElement('div');
+      const dt = document.createElement('dt');
+      dt.textContent = term;
+      const dd = document.createElement('dd');
+      dd.textContent = value;
+      group.append(dt, dd);
+      documentMeta.append(group);
+    });
+    const printButton = document.createElement('button');
+    printButton.type = 'button';
+    printButton.className = 'document-print';
+    printButton.textContent = 'Print / save document';
+    printButton.addEventListener('click', () => window.print());
+    documentBar.append(documentIdentity, documentMeta, printButton);
+
     const header = document.createElement('header');
     const number = document.createElement('span');
     number.className = 'lesson-number';
@@ -211,7 +236,14 @@
       }
     });
     check.append(label, question, options, button);
-    stage.append(header, sections, check);
+    const recordNotice = document.createElement('aside');
+    recordNotice.className = 'training-record-notice';
+    const noticeTitle = document.createElement('strong');
+    noticeTitle.textContent = 'Employee record notice';
+    const noticeCopy = document.createElement('p');
+    noticeCopy.textContent = 'Completing this knowledge check records your employee ID, result, and completion time. All four documents must be completed before the signed onboarding packet can be submitted to management.';
+    recordNotice.append(noticeTitle, noticeCopy);
+    stage.append(documentBar, header, sections, recordNotice, check);
   };
 
   const renderOnboardingReviewState = () => {
