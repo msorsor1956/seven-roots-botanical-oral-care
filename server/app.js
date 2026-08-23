@@ -35,6 +35,7 @@ const contentTypes = new Map([
   [".svg", "image/svg+xml"],
   [".webp", "image/webp"],
   [".png", "image/png"],
+  [".pdf", "application/pdf"],
   [".txt", "text/plain; charset=utf-8"],
   [".xml", "application/xml; charset=utf-8"]
 ]);
@@ -393,7 +394,7 @@ export async function createApplication(options = {}) {
         sendJson(response, 200, {
           status: "ok",
           service: "seven-roots-api",
-          version: "1.9.0",
+          version: "1.10.0",
           storage: "file",
           payments: payments.configured ? "ready" : "configuration_required",
           inventoryIntegration: zoho.active ? "zoho_enabled" : "local",

@@ -10,7 +10,8 @@ export const formats = Object.freeze([
     featured: false,
     structure: "Slim paper sleeve",
     primaryUse: "Trial and travel",
-    description: "One hygienically wrapped chewing stick in a slim paper sleeve, designed for trial, hospitality, travel, and sampling.",
+    dimensions: { lengthMm: 190, widthMm: 38, depthMm: 22 },
+    description: "One sealed 165 mm chewing stick in a narrow kraft cradle and tamper-evident forest-green sleeve, designed for trial, hospitality, travel, and sampling.",
     included: ["One wrapped botanical chewing stick", "Quick ritual guide"],
     pricing: null
   },
@@ -25,7 +26,8 @@ export const formats = Object.freeze([
     featured: true,
     structure: "Pull-drawer carton",
     primaryUse: "Daily ritual",
-    description: "Five hygienically wrapped chewing sticks in a pull-drawer carton, paired with a reusable ventilated travel tube and a clear ritual guide.",
+    dimensions: { lengthMm: 200, widthMm: 110, depthMm: 38 },
+    description: "Five individually wrapped chewing sticks in a pull-drawer carton, paired with a reusable ventilated travel tube and a folded ritual-and-care guide.",
     included: ["Five wrapped botanical chewing sticks", "Reusable ventilated travel tube", "Ritual and care guide"],
     pricing: null
   },
@@ -40,7 +42,8 @@ export const formats = Object.freeze([
     featured: false,
     structure: "Recloseable paperboard box",
     primaryUse: "Household reserve",
-    description: "Twelve hygienically wrapped chewing sticks in a recloseable paperboard format designed for repeat customers and households.",
+    dimensions: { lengthMm: 210, widthMm: 155, depthMm: 50 },
+    description: "Twelve individually wrapped chewing sticks in two indexed rows, protected by a fibre organizer and recloseable paperboard carton for households and repeat use.",
     included: ["Twelve wrapped botanical chewing sticks", "Recloseable paper band", "Ritual and care guide"],
     pricing: null
   }

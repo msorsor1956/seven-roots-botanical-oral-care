@@ -13,20 +13,20 @@
   const productData = {
     travel: {
       sku: 'SR-T01 · Trial and travel', title: 'Travel Sleeve', count: '1 stick',
-      structure: 'Slim paper sleeve', use: 'Travel and sampling', mark: '1 STICK',
-      copy: 'One authenticated, hygienically wrapped chewing stick in a slim paper sleeve for trial, hospitality, travel, and sampling.',
+      structure: 'Slim paper sleeve', use: 'Travel and sampling', dimensions: '190 × 38 × 22 mm', mark: '1 STICK',
+      copy: 'One sealed 165 mm chewing stick in a narrow kraft cradle and tamper-evident forest-green sleeve for trial, hospitality, travel, and sampling.',
       parts: ['sleeve', 'band', 'stick']
     },
     ritual: {
       sku: 'SR-R05 · Signature format', title: 'Daily Ritual', count: '5 sticks',
-      structure: 'Drawer carton', use: 'Daily ritual', mark: '5 STICKS',
-      copy: 'Five hygienically wrapped chewing sticks in a pull-drawer carton, paired with a reusable ventilated travel tube and a clear ritual guide.',
+      structure: 'Drawer carton', use: 'Daily ritual', dimensions: '200 × 110 × 38 mm', mark: '5 STICKS',
+      copy: 'Five individually wrapped sticks in a pull-drawer carton, paired with a reusable ventilated travel tube and a folded ritual-and-care guide.',
       parts: ['sleeve', 'band', 'tray', 'wraps', 'tube', 'guide']
     },
     family: {
       sku: 'SR-F12 · Household format', title: 'Family Reserve', count: '12 sticks',
-      structure: 'Recloseable carton', use: 'Household and repeat use', mark: '12 STICKS',
-      copy: 'Twelve individually wrapped sticks in a recloseable paperboard format designed for households, repeat customers, and careful stock rotation.',
+      structure: 'Recloseable carton', use: 'Household and repeat use', dimensions: '210 × 155 × 50 mm', mark: '12 STICKS',
+      copy: 'Twelve individually wrapped sticks in two indexed rows, protected by a fibre organizer and recloseable carton for household stock rotation.',
       parts: ['sleeve', 'band', 'wraps']
     }
   };
@@ -307,6 +307,7 @@
     root.querySelector('[data-3d-count]').textContent = data.count;
     root.querySelector('[data-3d-structure]').textContent = data.structure;
     root.querySelector('[data-3d-use]').textContent = data.use;
+    root.querySelector('[data-3d-dimensions]').textContent = data.dimensions;
     wordmark.querySelector('small').textContent = data.mark;
     root.querySelectorAll('[data-3d-part]').forEach(button => { button.hidden = !data.parts.includes(button.getAttribute('data-3d-part')); });
     const explodeButton = root.querySelector('[data-3d-action="explode"]');

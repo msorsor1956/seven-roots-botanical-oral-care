@@ -17,6 +17,8 @@ The Railway deployment serves the frontend and API from one Node process. The Gi
 - Responsive editorial product experience
 - Dependency-free Canvas 360° viewer with three pack variants
 - Assembled and exploded product states
+- Branded three-format exploded packaging family with proposed metric and imperial production dimensions
+- Downloadable four-page packaging production brief with material, construction, and validation guidance
 - Drag, swipe, keyboard, zoom, reset, and auto-rotation controls
 - Reduced-motion and static-image fallbacks
 - Accessible pre-launch signup connected to the API
@@ -198,6 +200,12 @@ Authorization: Bearer <ADMIN_API_KEY>
 ```
 
 See [docs/API.md](docs/API.md) for endpoint details and examples.
+
+## Packaging production brief
+
+The storefront includes proposed package descriptions and dimensions for the one-stick Travel Sleeve, five-stick Daily Ritual, and twelve-stick Family Reserve. The supplier-facing brief is available at [assets/SEVEN_ROOTS_Packaging_Production_Brief.pdf](assets/SEVEN_ROOTS_Packaging_Production_Brief.pdf), with the editable source specification in [docs/PACKAGING-SPECIFICATIONS.md](docs/PACKAGING-SPECIFICATIONS.md).
+
+These measurements are a design and quoting basis, not final dielines. Confirm them against conditioned production samples and converter engineering before tooling or mass production.
 
 ## GitHub Pages
 
