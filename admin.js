@@ -249,6 +249,13 @@
     const testButton = qs('[data-zoho-test]');
     const syncButton = qs('[data-zoho-sync]');
     const orderButton = qs('[data-zoho-orders-sync]');
+    const connectButton = qs('[data-zoho-connect]');
+    const provisionButton = qs('[data-zoho-provision]');
+    connectButton.textContent = status.oauth?.connected ? 'Reconnect Zoho securely' : 'Connect Zoho securely';
+    connectButton.disabled = !status.oauth?.configurationReady;
+    connectButton.title = status.oauth?.configurationReady ? '' : `Add ${(status.oauth?.missingSettings || []).join(', ')} in Railway.`;
+    provisionButton.disabled = !status.oauth?.connected;
+    provisionButton.title = status.oauth?.connected ? '' : 'Connect Zoho before preparing products and the online-store customer.';
     testButton.disabled = !status.configured;
     syncButton.disabled = !status.configured;
     orderButton.disabled = !status.enabled || !status.inventoryAuthority || !((status.pendingOrders || 0) + (status.failedOrders || 0));
@@ -1018,6 +1025,25 @@
       button.disabled = false;
     }
   };
+
+  qs('[data-zoho-connect]').addEventListener('click', async (event) => {
+    const button = event.currentTarget;
+    button.disabled = true;
+    setStatus(qs('[data-zoho-status]'), 'Preparing a restricted Zoho authorization…');
+    try {
+      const authorization = await api('/api/v1/admin/zoho/oauth/start', { method: 'POST' });
+      window.location.assign(authorization.authorizationUrl);
+    } catch (error) {
+      setStatus(qs('[data-zoho-status]'), error.message, true);
+      button.disabled = false;
+    }
+  });
+  qs('[data-zoho-provision]').addEventListener('click', (event) => runZohoAction(
+    event.currentTarget,
+    '/api/v1/admin/zoho/provision',
+    'Creating any missing storefront products and the dedicated online-store customer…',
+    'Zoho products, warehouse mappings, and customer record are prepared.'
+  ));
 
   qs('[data-zoho-test]').addEventListener('click', (event) => runZohoAction(
     event.currentTarget,

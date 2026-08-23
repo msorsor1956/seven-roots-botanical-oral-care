@@ -161,6 +161,8 @@ The financial report separates gross sales, product sales, shipping collected, t
 
 `GET /api/v1/admin/zoho/status` reports configuration readiness, masked organization information, the Zoho data center, Liberia and U.S. locations, SKU mappings, last synchronization, and paid-order outbox counts. It never returns an OAuth credential.
 
+`POST /api/v1/admin/zoho/oauth/start` creates a short-lived, single-use OAuth state and returns the official Zoho authorization URL. `GET /api/v1/zoho/callback` verifies that state, exchanges the authorization code server-side, and encrypts the reusable refresh token on the private data volume. `POST /api/v1/admin/zoho/provision` idempotently creates missing storefront items with zero opening stock and creates or reuses the dedicated online-store customer.
+
 `POST /api/v1/admin/zoho/test` validates OAuth, configured location IDs, and exact SKU mappings without changing checkout inventory. `POST /api/v1/admin/zoho/sync` pulls the latest location quantities. When `ZOHO_INVENTORY_ENABLED=false`, the pull is a readiness preview; when enabled and all mappings pass, the U.S. location's sellable quantity becomes authoritative for checkout.
 
 Signed paid Stripe events enter a persistent Zoho outbox. `POST /api/v1/admin/zoho/orders/sync` retries pending or failed exports. `GET /api/v1/admin/zoho/orders` returns the private outbox status and Zoho sales-order IDs. Zoho writes are idempotent by the customer-facing `SR-...` order number.

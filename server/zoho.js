@@ -28,6 +28,13 @@ const requiredSettings = [
   ["onlineCustomerId", "ZOHO_ONLINE_CUSTOMER_ID"]
 ];
 
+const authenticationSettings = [
+  ["organizationId", "ZOHO_INVENTORY_ORGANIZATION_ID"],
+  ["clientId", "ZOHO_CLIENT_ID"],
+  ["clientSecret", "ZOHO_CLIENT_SECRET"],
+  ["refreshToken", "ZOHO_REFRESH_TOKEN"]
+];
+
 const safeMessage = (value, fallback) => {
   const text = typeof value === "string" ? value.replace(/[\r\n]+/gu, " ").trim() : "";
   return (text || fallback).slice(0, 280);
@@ -141,6 +148,10 @@ export class ZohoInventory {
     return this.missingSettings.length === 0;
   }
 
+  get authenticated() {
+    return authenticationSettings.every(([property]) => Boolean(this[property]));
+  }
+
   get active() {
     return this.configured && this.enabled;
   }
@@ -177,8 +188,24 @@ export class ZohoInventory {
     throw new ZohoConfigurationError("Zoho Inventory is waiting for its Railway connection settings.", this.missingSettings);
   }
 
+  #assertAuthenticated() {
+    const missing = authenticationSettings.filter(([property]) => !this[property]).map(([, environmentName]) => environmentName);
+    if (!missing.length) return;
+    throw new ZohoConfigurationError("Zoho Inventory is waiting for its OAuth connection settings.", missing);
+  }
+
+  setRefreshToken(value) {
+    this.refreshToken = String(value || "").trim();
+    this.accessToken = "";
+    this.accessTokenExpiresAt = 0;
+  }
+
+  setOnlineCustomerId(value) {
+    this.onlineCustomerId = String(value || "").trim();
+  }
+
   async #refreshAccessToken() {
-    this.#assertConfigured();
+    this.#assertAuthenticated();
     const body = new URLSearchParams({
       refresh_token: this.refreshToken,
       client_id: this.clientId,
@@ -219,7 +246,7 @@ export class ZohoInventory {
   }
 
   async #request(pathname, { method = "GET", query = {}, body, retry = true } = {}) {
-    this.#assertConfigured();
+    this.#assertAuthenticated();
     const url = new URL(`${this.apiBaseUrl}/${String(pathname).replace(/^\/+|\/+$/gu, "")}`);
     url.searchParams.set("organization_id", this.organizationId);
     for (const [key, value] of Object.entries(query)) {
@@ -270,6 +297,108 @@ export class ZohoInventory {
       if (!hasMore) break;
     }
     return items;
+  }
+
+  async listCustomers() {
+    const contacts = [];
+    for (let page = 1; page <= 10; page += 1) {
+      const payload = await this.#request("contacts", { query: { page, per_page: 200, contact_type: "customer" } });
+      const pageContacts = Array.isArray(payload.contacts) ? payload.contacts : [];
+      contacts.push(...pageContacts);
+      const hasMore = payload.page_context?.has_more_page ?? pageContacts.length === 200;
+      if (!hasMore) break;
+    }
+    return contacts;
+  }
+
+  async ensureOnlineCustomer() {
+    const contactName = "SEVEN ROOTS Online Store";
+    const contacts = await this.listCustomers();
+    let contact = contacts.find((record) => String(record.contact_name || record.company_name || "").trim().toLowerCase() === contactName.toLowerCase());
+    let created = false;
+    if (!contact) {
+      const payload = await this.#request("contacts", {
+        method: "POST",
+        body: {
+          contact_name: contactName,
+          company_name: "SEVEN ROOTS",
+          contact_type: "customer",
+          website: "https://sevenroots.info",
+          payment_terms: 0,
+          notes: "Dedicated customer record for paid orders from sevenroots.info."
+        }
+      });
+      contact = payload.contact || null;
+      created = true;
+    }
+    const id = String(contact?.contact_id || "");
+    if (!id) throw new ZohoApiError("Zoho created no identifiable online-store customer.");
+    this.setOnlineCustomerId(id);
+    return {
+      id,
+      name: String(contact?.contact_name || contactName),
+      status: String(contact?.status || "active"),
+      created
+    };
+  }
+
+  async ensureCatalog(catalog) {
+    if (!this.liberiaLocationId || !this.usLocationId) {
+      const missing = [];
+      if (!this.liberiaLocationId) missing.push("ZOHO_LIBERIA_LOCATION_ID");
+      if (!this.usLocationId) missing.push("ZOHO_US_LOCATION_ID");
+      throw new ZohoConfigurationError("Both Zoho warehouse locations are required before products can be prepared.", missing);
+    }
+    const existingItems = await this.listItems();
+    const itemBySku = new Map(existingItems.map((item) => [String(item.sku || "").trim().toUpperCase(), item]));
+    const prepared = [];
+    for (const format of catalog) {
+      let item = itemBySku.get(String(format.sku || "").trim().toUpperCase());
+      let created = false;
+      if (!item) {
+        const unitAmount = Number(format.pricing?.unitAmount);
+        if (!Number.isInteger(unitAmount) || unitAmount <= 0) {
+          throw new ZohoConfigurationError(`A verified selling price is required before creating ${format.sku}.`);
+        }
+        const payload = await this.#request("items", {
+          method: "POST",
+          body: {
+            name: format.name,
+            sku: format.sku,
+            unit: "pcs",
+            item_type: "inventory",
+            product_type: "goods",
+            can_be_sold: true,
+            can_be_purchased: false,
+            track_inventory: true,
+            description: String(format.description || "").slice(0, 6000),
+            rate: Number((unitAmount / 100).toFixed(2)),
+            reorder_level: 5,
+            locations: [
+              { location_id: this.liberiaLocationId, initial_stock: 0, initial_stock_rate: 0 },
+              { location_id: this.usLocationId, initial_stock: 0, initial_stock_rate: 0 }
+            ]
+          }
+        });
+        item = payload.item || null;
+        created = true;
+      }
+      const id = String(item?.item_id || "");
+      if (!id) throw new ZohoApiError(`Zoho created no identifiable item for ${format.sku}.`);
+      prepared.push({ id, sku: format.sku, name: String(item.name || format.name), created });
+    }
+    return prepared;
+  }
+
+  async provisionStorefront(catalog) {
+    const items = await this.ensureCatalog(catalog);
+    const onlineCustomer = await this.ensureOnlineCustomer();
+    return {
+      items,
+      onlineCustomer,
+      createdItems: items.filter((item) => item.created).length,
+      reusedItems: items.filter((item) => !item.created).length
+    };
   }
 
   async getOnlineCustomer() {

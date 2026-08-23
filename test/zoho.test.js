@@ -146,3 +146,37 @@ test("Zoho adapter rejects non-Zoho API domains", () => {
     ZohoConfigurationError
   );
 });
+
+test("Zoho adapter provisions only missing storefront items and reuses the online customer", async () => {
+  const requests = [];
+  const fetchMock = async (input, options = {}) => {
+    const url = new URL(input);
+    requests.push({ url, options });
+    if (url.hostname === "accounts.zoho.com") return jsonResponse({ access_token: "temporary_access_token", expires_in_sec: 3600 });
+    if (url.pathname.endsWith("/items") && options.method === "GET") {
+      return jsonResponse({ code: 0, items: [{ item_id: "item_existing", name: "Travel Sleeve", sku: "SR-T01" }], page_context: { has_more_page: false } });
+    }
+    if (url.pathname.endsWith("/items") && options.method === "POST") {
+      const body = JSON.parse(options.body);
+      assert.equal(body.track_inventory, true);
+      assert.equal(body.locations.length, 2);
+      assert.equal(body.locations.every((location) => location.initial_stock === 0), true);
+      return jsonResponse({ code: 0, item: { item_id: `item_${body.sku}`, name: body.name, sku: body.sku } }, 201);
+    }
+    if (url.pathname.endsWith("/contacts") && options.method === "GET") {
+      return jsonResponse({ code: 0, contacts: [{ contact_id: "customer_existing", contact_name: "SEVEN ROOTS Online Store", status: "active" }], page_context: { has_more_page: false } });
+    }
+    throw new Error(`Unexpected Zoho provisioning URL: ${url}`);
+  };
+  const zoho = new ZohoInventory({ ...connectedOptions(fetchMock), onlineCustomerId: "" });
+  const catalog = formats.map((format, index) => ({
+    ...format,
+    pricing: { unitAmount: [599, 1999, 3999][index], currency: "USD" }
+  }));
+  const result = await zoho.provisionStorefront(catalog);
+  assert.equal(result.createdItems, 2);
+  assert.equal(result.reusedItems, 1);
+  assert.equal(result.onlineCustomer.id, "customer_existing");
+  assert.equal(zoho.onlineCustomerId, "customer_existing");
+  assert.equal(requests.filter((request) => request.url.pathname.endsWith("/items") && request.options.method === "POST").length, 2);
+});

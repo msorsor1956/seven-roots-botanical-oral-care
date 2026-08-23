@@ -1,6 +1,6 @@
 {
   "name": "seven-roots-botanical-oral-care",
-  "version": "1.8.1",
+  "version": "1.9.0",
   "private": true,
   "description": "SEVEN ROOTS storefront, payments, Zoho inventory, and Liberia/U.S. staff operations",
   "type": "module",
@@ -11,7 +11,7 @@
     "start": "node server/index.js",
     "dev": "NODE_ENV=development node --watch server/index.js",
     "test": "node --test",
-    "check": "node --check server/index.js && node --check server/app.js && node --check server/store.js && node --check server/staff.js && node --check server/email.js && node --check server/whatsapp.js && node --check server/work-files.js && node --check server/payments.js && node --check server/zoho.js && node --check app.js && node --check order-success.js && node --check admin.js && node --check staff.js",
+    "check": "node --check server/index.js && node --check server/app.js && node --check server/store.js && node --check server/staff.js && node --check server/email.js && node --check server/whatsapp.js && node --check server/work-files.js && node --check server/payments.js && node --check server/zoho.js && node --check server/zoho-oauth.js && node --check app.js && node --check order-success.js && node --check admin.js && node --check staff.js",
     "security": "node scripts/check-secrets.js"
   },
   "dependencies": {

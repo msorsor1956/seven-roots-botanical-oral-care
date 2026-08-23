@@ -10,6 +10,7 @@ import { createPayments, PaymentConfigurationError } from "./payments.js";
 import { InventoryError, JsonStore } from "./store.js";
 import { validateInquiry, validateWaitlist } from "./validation.js";
 import { createZohoInventory, ZohoApiError, ZohoConfigurationError } from "./zoho.js";
+import { createZohoOAuthManager, ZohoOAuthError } from "./zoho-oauth.js";
 import { createWhatsAppService } from "./whatsapp.js";
 import { createWorkFileStorage, WorkFileError } from "./work-files.js";
 import {
@@ -51,6 +52,22 @@ const sendJson = (response, status, payload, extraHeaders = {}) => {
   response.writeHead(status, { ...jsonHeaders, "Cache-Control": "no-store", ...extraHeaders });
   response.end(JSON.stringify(payload));
 };
+
+const sendHtml = (response, status, body) => {
+  response.writeHead(status, {
+    "Content-Type": "text/html; charset=utf-8",
+    "Cache-Control": "no-store",
+    "Content-Security-Policy": "default-src 'none'; style-src 'unsafe-inline'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'",
+    "X-Content-Type-Options": "nosniff"
+  });
+  response.end(body);
+};
+
+const zohoCallbackPage = ({ success, message }) => `<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>${success ? "Zoho connected" : "Zoho connection needs attention"} | SEVEN ROOTS</title>
+<style>body{margin:0;background:#10251d;color:#f5f0df;font:16px/1.55 system-ui,sans-serif;display:grid;min-height:100vh;place-items:center}.card{width:min(560px,calc(100% - 40px));background:#17382b;border:1px solid #8aa992;border-radius:24px;padding:36px;box-sizing:border-box}.mark{font-size:2.4rem}.eyebrow{letter-spacing:.18em;text-transform:uppercase;color:#c7ad72;font-size:.75rem}h1{font:600 2rem/1.1 Georgia,serif;margin:.5rem 0 1rem}p{color:#dce6dd}a{display:inline-block;margin-top:1rem;padding:.8rem 1rem;border-radius:999px;background:#e1c98b;color:#10251d;text-decoration:none;font-weight:700}</style></head>
+<body><main class="card"><div class="mark">${success ? "✓" : "!"}</div><p class="eyebrow">SEVEN ROOTS · Zoho Inventory</p><h1>${success ? "Authorization secured" : "Connection incomplete"}</h1><p>${message}</p><a href="/admin">Return to the admin dashboard</a></main></body></html>`;
 
 const publicRecord = (record) => ({ id: record.id, preferredFormat: record.preferredFormat, createdAt: record.createdAt });
 
@@ -172,24 +189,37 @@ export async function createApplication(options = {}) {
   const environment = options.environment || process.env.NODE_ENV || "development";
   const dataDir = path.resolve(options.dataDir || process.env.DATA_DIR || path.join(rootDir, ".data"));
   const adminApiKey = options.adminApiKey ?? process.env.ADMIN_API_KEY ?? "";
+  const publicBaseUrl = options.publicBaseUrl ?? process.env.PUBLIC_BASE_URL ?? "";
   const configuredOrigins = String(options.allowedOrigins ?? process.env.ALLOWED_ORIGINS ?? "")
     .split(",").map((origin) => origin.trim()).filter(Boolean);
+  let configuredPublicOrigin = "";
+  try {
+    configuredPublicOrigin = new URL(publicBaseUrl).origin;
+  } catch {}
   const store = options.store || await new JsonStore(dataDir).init();
   const payments = options.payments || createPayments(options.paymentOptions);
-  const zoho = options.zoho || createZohoInventory(options.zohoOptions);
+  const zohoOAuth = options.zohoOAuth || await createZohoOAuthManager({
+    dataDir,
+    publicBaseUrl,
+    environment: options.zohoOAuthOptions?.environment || options.zohoOptions?.environment || process.env,
+    ...options.zohoOAuthOptions
+  }).init();
+  const resolvedZohoOptions = { ...(options.zohoOptions || {}) };
+  if (!resolvedZohoOptions.refreshToken && zohoOAuth.refreshToken) resolvedZohoOptions.refreshToken = zohoOAuth.refreshToken;
+  if (!resolvedZohoOptions.onlineCustomerId && zohoOAuth.data?.onlineCustomerId) {
+    resolvedZohoOptions.onlineCustomerId = zohoOAuth.data.onlineCustomerId;
+  }
+  const zoho = options.zoho || createZohoInventory(resolvedZohoOptions);
   const email = options.email || createInvitationEmailService(options.emailOptions);
   const whatsapp = options.whatsapp || createWhatsAppService(options.whatsappOptions);
   const workFiles = options.workFiles || createWorkFileStorage(dataDir, options.workFileOptions);
-  let configuredPublicOrigin = "";
-  try {
-    configuredPublicOrigin = new URL(options.publicBaseUrl ?? process.env.PUBLIC_BASE_URL ?? "").origin;
-  } catch {}
   const writeLimiter = createRateLimiter({ windowMs: 15 * 60 * 1000, max: 20 });
   const checkoutLimiter = createRateLimiter({ windowMs: 15 * 60 * 1000, max: 8 });
   const connectorLimiter = createRateLimiter({ windowMs: 15 * 60 * 1000, max: 12 });
   const staffAuthLimiter = createRateLimiter({ windowMs: 15 * 60 * 1000, max: 12 });
   const staffFileLimiter = createRateLimiter({ windowMs: 15 * 60 * 1000, max: 40 });
   let zohoProcessing = false;
+  const zohoStatus = () => ({ ...zoho.status(store.zohoSyncState()), oauth: zohoOAuth.status() });
 
   const processZohoOutbox = async (limit = 25) => {
     if (!zoho.active || !store.zohoSyncState().inventoryAuthority || zohoProcessing) {
@@ -363,7 +393,7 @@ export async function createApplication(options = {}) {
         sendJson(response, 200, {
           status: "ok",
           service: "seven-roots-api",
-          version: "1.8.1",
+          version: "1.9.0",
           storage: "file",
           payments: payments.configured ? "ready" : "configuration_required",
           inventoryIntegration: zoho.active ? "zoho_enabled" : "local",
@@ -371,6 +401,27 @@ export async function createApplication(options = {}) {
           workFiles: "ready",
           whatsapp: whatsapp.configured ? "ready" : "configuration_required"
         });
+        return;
+      }
+
+      if (request.method === "GET" && pathname === "/api/v1/zoho/callback") {
+        try {
+          if (url.searchParams.get("error")) throw new ZohoOAuthError("Zoho authorization was declined or cancelled.");
+          const completion = await zohoOAuth.complete({
+            code: url.searchParams.get("code"),
+            state: url.searchParams.get("state")
+          });
+          if (typeof zoho.setRefreshToken === "function") zoho.setRefreshToken(completion.refreshToken);
+          sendHtml(response, 200, zohoCallbackPage({
+            success: true,
+            message: "The reusable token is encrypted on the private Railway volume. No OAuth credential is exposed to the browser or stored in source code."
+          }));
+        } catch (error) {
+          sendHtml(response, error instanceof ZohoOAuthError ? error.status : 500, zohoCallbackPage({
+            success: false,
+            message: error instanceof ZohoOAuthError ? error.message : "The authorization could not be completed. Return to Admin and start again."
+          }));
+        }
         return;
       }
 
@@ -862,11 +913,33 @@ export async function createApplication(options = {}) {
           return;
         }
         if (request.method === "GET" && pathname === "/api/v1/admin/zoho/status") {
-          sendJson(response, 200, { data: zoho.status(store.zohoSyncState()) });
+          sendJson(response, 200, { data: zohoStatus() });
           return;
         }
         if (request.method === "GET" && pathname === "/api/v1/admin/zoho/orders") {
           sendJson(response, 200, { data: store.zohoOrderReport(url.searchParams.get("limit")) });
+          return;
+        }
+        if (request.method === "POST" && pathname === "/api/v1/admin/zoho/oauth/start") {
+          const rate = connectorLimiter(request);
+          if (!rate.allowed) throw new HttpError(429, "rate_limited", "Too many Zoho connection attempts. Try again later.", { retryAfter: rate.retryAfter });
+          const authorization = await zohoOAuth.createAuthorizationUrl();
+          sendJson(response, 200, { data: authorization, message: "Zoho authorization is ready." });
+          return;
+        }
+        if (request.method === "POST" && pathname === "/api/v1/admin/zoho/provision") {
+          const rate = connectorLimiter(request);
+          if (!rate.allowed) throw new HttpError(429, "rate_limited", "Too many Zoho setup attempts. Try again later.", { retryAfter: rate.retryAfter });
+          const publicFormats = await payments.publicFormats(formats);
+          const provisioning = await zoho.provisionStorefront(publicFormats);
+          await zohoOAuth.recordProvisioning(provisioning.onlineCustomer.id);
+          if (typeof zoho.setOnlineCustomerId === "function") zoho.setOnlineCustomerId(provisioning.onlineCustomer.id);
+          const inspection = await zoho.testConnection(formats);
+          const syncState = await store.recordZohoTest(inspection);
+          sendJson(response, 200, {
+            data: { provisioning, status: { ...zoho.status(syncState), oauth: zohoOAuth.status() } },
+            message: `${provisioning.createdItems} Zoho item${provisioning.createdItems === 1 ? "" : "s"} created; the online-store customer is ready.`
+          });
           return;
         }
         if (request.method === "POST" && pathname === "/api/v1/admin/zoho/test") {
@@ -876,7 +949,7 @@ export async function createApplication(options = {}) {
             const inspection = await zoho.testConnection(formats);
             const syncState = await store.recordZohoTest(inspection);
             sendJson(response, 200, {
-              data: zoho.status(syncState),
+              data: { ...zoho.status(syncState), oauth: zohoOAuth.status() },
               message: inspection.ready ? "Zoho connection and SKU mappings are verified." : "Zoho connected, but one or more SKU or location mappings need attention."
             });
           } catch (error) {
@@ -892,7 +965,7 @@ export async function createApplication(options = {}) {
             const result = await zoho.syncCatalog(formats);
             const syncState = await store.applyZohoSync(result);
             sendJson(response, 200, {
-              data: zoho.status(syncState),
+              data: { ...zoho.status(syncState), oauth: zohoOAuth.status() },
               message: result.activate ? "Zoho now controls U.S. checkout inventory." : "Zoho inventory was verified in readiness mode; checkout stock was not changed."
             });
           } catch (error) {
@@ -906,7 +979,7 @@ export async function createApplication(options = {}) {
           if (!rate.allowed) throw new HttpError(429, "rate_limited", "Too many Zoho synchronization attempts. Try again later.", { retryAfter: rate.retryAfter });
           const result = await processZohoOutbox(100);
           sendJson(response, 200, {
-            data: { ...result, status: zoho.status(store.zohoSyncState()) },
+            data: { ...result, status: zohoStatus() },
             message: result.skipped ? "Zoho write-back is waiting for a verified, enabled connection." : `${result.synced} paid order${result.synced === 1 ? "" : "s"} synchronized.`
           });
           return;
@@ -946,7 +1019,7 @@ export async function createApplication(options = {}) {
       throw new HttpError(405, "method_not_allowed", "Method not allowed.");
     } catch (error) {
       const inventoryError = error instanceof InventoryError;
-      const zohoError = error instanceof ZohoConfigurationError || error instanceof ZohoApiError;
+      const zohoError = error instanceof ZohoConfigurationError || error instanceof ZohoApiError || error instanceof ZohoOAuthError;
       const staffError = error instanceof StaffAccessError || error instanceof StaffValidationError;
       const workFileError = error instanceof WorkFileError;
       const status = error instanceof HttpError
@@ -963,6 +1036,8 @@ export async function createApplication(options = {}) {
             ? 503
             : error instanceof ZohoApiError
               ? 502
+              : error instanceof ZohoOAuthError
+                ? error.status
               : 500;
       if (status === 500) console.error(`[${requestId}]`, error);
       if (error?.details?.retryAfter) response.setHeader("Retry-After", String(error.details.retryAfter));
@@ -978,5 +1053,5 @@ export async function createApplication(options = {}) {
     }
   });
 
-  return { server, store, payments, zoho, email, whatsapp, workFiles, processZohoOutbox };
+  return { server, store, payments, zoho, zohoOAuth, email, whatsapp, workFiles, processZohoOutbox };
 }

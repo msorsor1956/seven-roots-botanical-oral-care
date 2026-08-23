@@ -109,10 +109,11 @@ ZOHO_INVENTORY_ENABLED=false
 ZOHO_INVENTORY_ORGANIZATION_ID=<Zoho organization ID>
 ZOHO_CLIENT_ID=<Zoho server client ID>
 ZOHO_CLIENT_SECRET=<Zoho server client secret>
-ZOHO_REFRESH_TOKEN=<offline OAuth refresh token>
+ZOHO_TOKEN_ENCRYPTION_KEY=<base64-encoded 32-byte key>
+ZOHO_REFRESH_TOKEN=<optional legacy offline OAuth refresh token>
 ZOHO_LIBERIA_LOCATION_ID=<Zoho Liberia source location ID>
 ZOHO_US_LOCATION_ID=<Zoho U.S. fulfillment location ID>
-ZOHO_ONLINE_CUSTOMER_ID=<Zoho customer ID used for web sales orders>
+ZOHO_ONLINE_CUSTOMER_ID=<optional existing Zoho customer ID used for web sales orders>
 ZOHO_ACCOUNTS_URL=https://accounts.zoho.com
 ZOHO_API_URL=https://www.zohoapis.com/inventory/v1
 ```
@@ -150,16 +151,16 @@ Once a format has a stock count, new Checkout Sessions reserve the requested pac
 
 ### Connect Zoho Inventory when the account is ready
 
-The deployed code can remain disconnected safely. It never accepts Zoho credentials through the browser or an API request; secrets belong only in Railway Variables.
+The deployed code can remain disconnected safely. The OAuth client secret stays in Railway, and the reusable refresh token is encrypted with AES-256-GCM on the private Railway volume. It is never returned by an API or written to GitHub.
 
-1. In Zoho Inventory, create the three items with the exact SKUs `SR-T01`, `SR-R05`, and `SR-F12`.
-2. Create a Liberia source location and a U.S. fulfillment location, then copy both location IDs.
-3. Create a dedicated `SEVEN ROOTS Online Store` customer and copy its customer ID. Paid web orders are filed against this customer while the Stripe order number remains the unique Zoho sales-order reference.
-4. Register a Zoho server-based OAuth client and issue an offline refresh token with only these scopes: `ZohoInventory.items.READ`, `ZohoInventory.settings.READ`, `ZohoInventory.contacts.READ`, `ZohoInventory.salesorders.CREATE`, `ZohoInventory.salesorders.READ`, `ZohoInventory.salesorders.UPDATE`, `ZohoInventory.transferorders.CREATE`, `ZohoInventory.transferorders.READ`, and `ZohoInventory.transferorders.UPDATE`.
-5. Add the variables above in Railway, leaving `ZOHO_INVENTORY_ENABLED=false`.
-6. Open `/admin`, run **Test connection**, and verify both locations plus all three SKU mappings.
-7. Run **Sync inventory** in readiness mode. This displays both warehouse counts without changing checkout.
-8. Set `ZOHO_INVENTORY_ENABLED=true` in Railway, redeploy, and run **Sync inventory** again. Verified U.S. sellable counts then become the checkout authority, while Liberia quantities remain visible for replenishment planning.
+1. In Zoho Inventory, enable Locations and create a Liberia source location plus a U.S. fulfillment location.
+2. Register a Zoho server-based OAuth client with homepage `https://sevenroots.info` and redirect URI `https://sevenroots.info/api/v1/zoho/callback`.
+3. Add the organization, client, location, data-center, and encryption-key variables above in Railway, leaving `ZOHO_INVENTORY_ENABLED=false`. `ZOHO_REFRESH_TOKEN` and `ZOHO_ONLINE_CUSTOMER_ID` can remain unset when using the secure admin connection flow.
+4. Open `/admin` and select **Connect Zoho securely**. The app requests only item read/create, settings read, contact read/create, sales-order read/create/update, and transfer-order read/create/update permissions.
+5. Select **Prepare products & customer**. The app reuses matching records and creates only missing SKUs `SR-T01`, `SR-R05`, and `SR-F12` with zero opening stock, plus the dedicated `SEVEN ROOTS Online Store` customer.
+6. Run **Test connection**, then **Sync inventory** in readiness mode. This displays both warehouse counts without changing checkout.
+7. Enter verified physical quantities in Zoho. Do not activate inventory authority while opening stock is still zero or unverified.
+8. Set `ZOHO_INVENTORY_ENABLED=true` in Railway only after every SKU has verified U.S. sellable stock, redeploy, and run **Sync inventory** again. U.S. counts then control checkout while Liberia counts remain visible for replenishment planning.
 
 Every signed paid Stripe order enters a durable outbox. When Zoho is enabled, the backend creates or finds the matching Zoho sales order by the SEVEN ROOTS order number, confirms it, and records the Zoho sales-order ID. Approved Liberia-to-U.S. replenishment records similarly create idempotent Zoho transfer orders and follow their in-transit and received states. Failed exports remain visible and can be retried from the admin dashboard. This follows Zoho's official [OAuth](https://www.zoho.com/inventory/api/v1/oauth/), [Items](https://www.zoho.com/inventory/api/v1/items/), [Locations](https://www.zoho.com/inventory/api/v1/locations/), [Sales Orders](https://www.zoho.com/inventory/api/v1/salesorders/), and [Transfer Orders](https://www.zoho.com/inventory/api/v1/transferorders/) API contracts.
 
