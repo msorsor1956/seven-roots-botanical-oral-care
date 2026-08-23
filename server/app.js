@@ -5,13 +5,17 @@ import http from "node:http";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { formats, formatBySlug } from "./catalog.js";
+import { createInvitationEmailService } from "./email.js";
 import { createPayments, PaymentConfigurationError } from "./payments.js";
 import { InventoryError, JsonStore } from "./store.js";
 import { validateInquiry, validateWaitlist } from "./validation.js";
 import { createZohoInventory, ZohoApiError, ZohoConfigurationError } from "./zoho.js";
+import { createWhatsAppService } from "./whatsapp.js";
+import { createWorkFileStorage, WorkFileError } from "./work-files.js";
 import {
   StaffAccessError,
   StaffValidationError,
+  cleanStaffText,
   clearStaffSessionCookie,
   hasStaffPermission,
   readStaffSessionCookie,
@@ -173,10 +177,18 @@ export async function createApplication(options = {}) {
   const store = options.store || await new JsonStore(dataDir).init();
   const payments = options.payments || createPayments(options.paymentOptions);
   const zoho = options.zoho || createZohoInventory(options.zohoOptions);
+  const email = options.email || createInvitationEmailService(options.emailOptions);
+  const whatsapp = options.whatsapp || createWhatsAppService(options.whatsappOptions);
+  const workFiles = options.workFiles || createWorkFileStorage(dataDir, options.workFileOptions);
+  let configuredPublicOrigin = "";
+  try {
+    configuredPublicOrigin = new URL(options.publicBaseUrl ?? process.env.PUBLIC_BASE_URL ?? "").origin;
+  } catch {}
   const writeLimiter = createRateLimiter({ windowMs: 15 * 60 * 1000, max: 20 });
   const checkoutLimiter = createRateLimiter({ windowMs: 15 * 60 * 1000, max: 8 });
   const connectorLimiter = createRateLimiter({ windowMs: 15 * 60 * 1000, max: 12 });
   const staffAuthLimiter = createRateLimiter({ windowMs: 15 * 60 * 1000, max: 12 });
+  const staffFileLimiter = createRateLimiter({ windowMs: 15 * 60 * 1000, max: 40 });
   let zohoProcessing = false;
 
   const processZohoOutbox = async (limit = 25) => {
@@ -210,6 +222,73 @@ export async function createApplication(options = {}) {
   };
 
   const adminActor = { id: "owner-admin-key", name: "Owner admin", role: "owner", locations: ["liberia", "us"] };
+  const adminContact = {
+    name: cleanStaffText(options.adminContact?.name ?? process.env.ADMIN_CONTACT_NAME ?? "SEVEN ROOTS Owner Admin", 120),
+    email: cleanStaffText(options.adminContact?.email ?? process.env.ADMIN_CONTACT_EMAIL, 254),
+    phone: cleanStaffText(options.adminContact?.phone ?? process.env.ADMIN_CONTACT_PHONE, 40),
+    whatsappNumber: cleanStaffText(options.adminContact?.whatsappNumber ?? process.env.ADMIN_WHATSAPP_NUMBER, 40),
+    roleLabel: "Owner administration"
+  };
+  const deliverStaffInvitation = async (created, invitationUrl) => {
+    const attemptedAt = new Date().toISOString();
+    try {
+      const result = await email.sendStaffInvitation({
+        user: created.user,
+        invitationUrl,
+        expiresAt: created.invitation.expiresAt,
+        invitationId: created.invitation.id
+      });
+      return store.recordStaffInvitationDelivery(created.invitation.id, {
+        status: "sent",
+        attemptedAt,
+        provider: result.provider,
+        messageId: result.messageId,
+        sentAt: result.sentAt
+      }, adminActor);
+    } catch (error) {
+      return store.recordStaffInvitationDelivery(created.invitation.id, {
+        status: error?.code === "email_not_configured" ? "not_configured" : "failed",
+        attemptedAt,
+        provider: email.status().provider,
+        error: error?.message || "The invitation email could not be delivered."
+      }, adminActor);
+    }
+  };
+  const deliverTaskWhatsApp = async (task, event) => {
+    const attemptedAt = new Date().toISOString();
+    const contact = store.staffTaskNotificationContact(task.id, event);
+    if (!contact?.whatsappNumber) {
+      return store.recordStaffTaskNotification(task.id, event, {
+        status: "missing_contact",
+        provider: whatsapp.status().provider,
+        attemptedAt,
+        error: "The notification recipient has no WhatsApp number."
+      });
+    }
+    try {
+      const result = await whatsapp.sendTaskUpdate({
+        to: contact.whatsappNumber,
+        recipientName: contact.name,
+        taskTitle: task.title,
+        taskStatus: event.replaceAll("_", " ")
+      });
+      return store.recordStaffTaskNotification(task.id, event, {
+        status: "sent",
+        provider: result.provider,
+        messageId: result.messageId,
+        recipientLast4: result.recipientLast4,
+        attemptedAt,
+        sentAt: result.sentAt
+      });
+    } catch (error) {
+      return store.recordStaffTaskNotification(task.id, event, {
+        status: error?.code === "whatsapp_not_configured" ? "not_configured" : "failed",
+        provider: whatsapp.status().provider,
+        attemptedAt,
+        error: error?.message || "The WhatsApp task notification could not be delivered."
+      });
+    }
+  };
   const requireStaff = async (request, permission = "") => {
     const authentication = await store.staffSession(readStaffSessionCookie(request));
     if (!authentication) throw new HttpError(401, "staff_unauthorized", "Sign in with an active staff account.");
@@ -269,7 +348,7 @@ export async function createApplication(options = {}) {
         if (!originAllowed) throw new HttpError(403, "origin_not_allowed", "This browser origin is not allowed.");
         response.writeHead(204, {
           "Access-Control-Allow-Methods": "GET, POST, PATCH, DELETE, OPTIONS",
-          "Access-Control-Allow-Headers": "Content-Type, Authorization, X-CSRF-Token, X-Request-Id",
+          "Access-Control-Allow-Headers": "Content-Type, Authorization, X-CSRF-Token, X-Request-Id, X-File-Name, X-File-Kind, X-File-Phase",
           "Access-Control-Max-Age": "86400"
         });
         response.end();
@@ -284,10 +363,13 @@ export async function createApplication(options = {}) {
         sendJson(response, 200, {
           status: "ok",
           service: "seven-roots-api",
-          version: "1.5.0",
+          version: "1.7.0",
           storage: "file",
           payments: payments.configured ? "ready" : "configuration_required",
-          inventoryIntegration: zoho.active ? "zoho_enabled" : "local"
+          inventoryIntegration: zoho.active ? "zoho_enabled" : "local",
+          emailDelivery: email.configured ? "ready" : "configuration_required",
+          workFiles: "ready",
+          whatsapp: whatsapp.configured ? "ready" : "configuration_required"
         });
         return;
       }
@@ -448,12 +530,60 @@ export async function createApplication(options = {}) {
         return;
       }
 
+      if (request.method === "GET" && pathname.startsWith("/api/v1/staff/files/")) {
+        const authentication = await requireStaff(request);
+        const fileId = pathname.slice("/api/v1/staff/files/".length);
+        const file = store.staffFile(authentication.user, fileId);
+        const stored = await workFiles.inspect(file);
+        const inline = file.family === "photo" || file.family === "video";
+        response.writeHead(200, {
+          "Content-Type": file.mimeType,
+          "Content-Length": stored.size,
+          "Content-Disposition": `${inline ? "inline" : "attachment"}; filename*=UTF-8''${encodeURIComponent(file.originalName)}`,
+          "Cache-Control": "private, no-store",
+          "X-Content-Type-Options": "nosniff"
+        });
+        createReadStream(stored.filePath).pipe(response);
+        return;
+      }
+
+      if (request.method === "PATCH" && pathname === "/api/v1/staff/profile") {
+        const authentication = await requireStaffMutation(request, "profile.update");
+        const user = await store.updateOwnStaffProfile(authentication.user, await readJson(request));
+        sendJson(response, 200, { data: user, message: "Contact profile updated." });
+        return;
+      }
+
+      if (request.method === "POST" && pathname.startsWith("/api/v1/staff/profile/files/")) {
+        const authentication = await requireStaffMutation(request, "profile.update");
+        const rate = staffFileLimiter(request);
+        if (!rate.allowed) throw new HttpError(429, "rate_limited", "Too many file uploads. Try again later.", { retryAfter: rate.retryAfter });
+        const kind = pathname.slice("/api/v1/staff/profile/files/".length);
+        let file;
+        try {
+          file = await workFiles.save(request, {
+            scope: "profiles",
+            scopeId: authentication.user.id,
+            kind,
+            originalName: request.headers["x-file-name"]
+          });
+          const result = await store.attachStaffProfileFile(authentication.user, file);
+          sendJson(response, 201, { data: result, message: kind === "signature" ? "Manager signature uploaded." : "Profile photo uploaded." });
+        } catch (error) {
+          if (file) await workFiles.remove(file);
+          throw error;
+        }
+        return;
+      }
+
       if (request.method === "GET" && pathname === "/api/v1/staff/workspace") {
         const authentication = await requireStaff(request);
         sendJson(response, 200, {
           data: {
             ...store.staffWorkspace(authentication.user),
-            zoho: zoho.status(store.zohoSyncState())
+            zoho: zoho.status(store.zohoSyncState()),
+            whatsapp: { configured: whatsapp.configured, provider: whatsapp.status().provider },
+            adminContact
           }
         });
         return;
@@ -462,15 +592,61 @@ export async function createApplication(options = {}) {
       if (request.method === "POST" && pathname === "/api/v1/staff/tasks") {
         const authentication = await requireStaffMutation(request, "tasks.manage");
         const task = await store.createStaffTask(authentication.user, await readJson(request));
-        sendJson(response, 201, { data: task, message: "Task created." });
+        const notification = task.assignedTo ? await deliverTaskWhatsApp(task, "assigned") : null;
+        sendJson(response, 201, { data: { task, notification }, message: "Task created. Add SOW files before work begins." });
+        return;
+      }
+
+      if (request.method === "POST" && pathname.startsWith("/api/v1/staff/tasks/") && pathname.endsWith("/files")) {
+        const authentication = await requireStaffMutation(request, "tasks.update");
+        const rate = staffFileLimiter(request);
+        if (!rate.allowed) throw new HttpError(429, "rate_limited", "Too many file uploads. Try again later.", { retryAfter: rate.retryAfter });
+        const taskId = pathname.slice("/api/v1/staff/tasks/".length, -"/files".length);
+        const kind = cleanStaffText(request.headers["x-file-kind"], 30).toLowerCase();
+        const phase = cleanStaffText(request.headers["x-file-phase"], 20).toLowerCase();
+        let file;
+        try {
+          file = await workFiles.save(request, {
+            scope: "tasks",
+            scopeId: taskId,
+            kind,
+            originalName: request.headers["x-file-name"]
+          });
+          const task = await store.attachStaffTaskFile(authentication.user, taskId, file, phase);
+          sendJson(response, 201, { data: task, message: "Work file uploaded securely." });
+        } catch (error) {
+          if (file) await workFiles.remove(file);
+          throw error;
+        }
+        return;
+      }
+
+      if (request.method === "POST" && pathname.startsWith("/api/v1/staff/tasks/") && pathname.endsWith("/submit")) {
+        const authentication = await requireStaffMutation(request, "tasks.update");
+        const taskId = pathname.slice("/api/v1/staff/tasks/".length, -"/submit".length);
+        const task = await store.submitStaffTaskForApproval(authentication.user, taskId, await readJson(request));
+        const notification = await deliverTaskWhatsApp(task, "submitted");
+        sendJson(response, 200, { data: { task, notification }, message: "Task submitted for manager approval." });
+        return;
+      }
+
+      if (request.method === "POST" && pathname.startsWith("/api/v1/staff/tasks/") && pathname.endsWith("/review")) {
+        const authentication = await requireStaffMutation(request, "tasks.approve");
+        const taskId = pathname.slice("/api/v1/staff/tasks/".length, -"/review".length);
+        const task = await store.reviewStaffTask(authentication.user, taskId, await readJson(request));
+        const event = task.status === "completed" ? "approved" : "changes_requested";
+        const notification = await deliverTaskWhatsApp(task, event);
+        sendJson(response, 200, { data: { task, notification }, message: task.status === "completed" ? "Task approved and completed." : "Changes returned to the employee." });
         return;
       }
 
       if (request.method === "PATCH" && pathname.startsWith("/api/v1/staff/tasks/")) {
         const authentication = await requireStaffMutation(request, "tasks.update");
         const taskId = pathname.slice("/api/v1/staff/tasks/".length);
-        const task = await store.updateStaffTask(authentication.user, taskId, await readJson(request));
-        sendJson(response, 200, { data: task, message: "Task updated." });
+        const input = await readJson(request);
+        const task = await store.updateStaffTask(authentication.user, taskId, input);
+        const notification = Object.hasOwn(input, "assignedTo") && task.assignedTo ? await deliverTaskWhatsApp(task, "assigned") : null;
+        sendJson(response, 200, { data: { task, notification }, message: "Task updated." });
         return;
       }
 
@@ -557,6 +733,14 @@ export async function createApplication(options = {}) {
       if (pathname.startsWith("/api/v1/admin/")) {
         if (!adminApiKey) throw new HttpError(503, "admin_not_configured", "Admin access has not been configured.");
         if (!secureEqual(extractBearer(request), adminApiKey)) throw new HttpError(401, "unauthorized", "A valid admin API key is required.");
+        if (request.method === "GET" && pathname === "/api/v1/admin/email/status") {
+          sendJson(response, 200, { data: email.status() });
+          return;
+        }
+        if (request.method === "GET" && pathname === "/api/v1/admin/whatsapp/status") {
+          sendJson(response, 200, { data: whatsapp.status() });
+          return;
+        }
         if (request.method === "GET" && pathname === "/api/v1/admin/staff/roles") {
           sendJson(response, 200, { data: roleCatalog() });
           return;
@@ -567,20 +751,26 @@ export async function createApplication(options = {}) {
         }
         if (request.method === "POST" && pathname === "/api/v1/admin/staff") {
           const created = await store.createStaffUser(await readJson(request), adminActor);
-          const invitationUrl = `${hostOrigin || "http://localhost"}/staff?invite=${encodeURIComponent(created.invitation.token)}`;
+          const invitationUrl = `${configuredPublicOrigin || hostOrigin || "http://localhost"}/staff?invite=${encodeURIComponent(created.invitation.token)}`;
+          const delivery = await deliverStaffInvitation(created, invitationUrl);
           sendJson(response, 201, {
-            data: { user: created.user, invitationUrl, expiresAt: created.invitation.expiresAt },
-            message: "Employee invited. Copy the one-time link now; it will not be shown again."
+            data: { user: created.user, invitationUrl, expiresAt: created.invitation.expiresAt, delivery },
+            message: delivery.status === "sent"
+              ? `Employee invited. The activation link was emailed to ${created.user.email}.`
+              : "Employee invited, but the email was not delivered. Use the recovery link and check email settings."
           });
           return;
         }
         if (request.method === "POST" && pathname.startsWith("/api/v1/admin/staff/") && pathname.endsWith("/invitations")) {
           const userId = pathname.slice("/api/v1/admin/staff/".length, -"/invitations".length);
           const created = await store.issueStaffInvitation(userId, adminActor);
-          const invitationUrl = `${hostOrigin || "http://localhost"}/staff?invite=${encodeURIComponent(created.invitation.token)}`;
+          const invitationUrl = `${configuredPublicOrigin || hostOrigin || "http://localhost"}/staff?invite=${encodeURIComponent(created.invitation.token)}`;
+          const delivery = await deliverStaffInvitation(created, invitationUrl);
           sendJson(response, 201, {
-            data: { user: created.user, invitationUrl, expiresAt: created.invitation.expiresAt },
-            message: "A new one-time invitation link was created."
+            data: { user: created.user, invitationUrl, expiresAt: created.invitation.expiresAt, delivery },
+            message: delivery.status === "sent"
+              ? `A new activation link was emailed to ${created.user.email}.`
+              : "A new activation link was created, but the email was not delivered. Use the recovery link and check email settings."
           });
           return;
         }
@@ -713,12 +903,15 @@ export async function createApplication(options = {}) {
       const inventoryError = error instanceof InventoryError;
       const zohoError = error instanceof ZohoConfigurationError || error instanceof ZohoApiError;
       const staffError = error instanceof StaffAccessError || error instanceof StaffValidationError;
+      const workFileError = error instanceof WorkFileError;
       const status = error instanceof HttpError
         ? error.status
         : error instanceof StaffAccessError
           ? error.status
           : error instanceof StaffValidationError
             ? 422
+          : workFileError
+            ? error.status
         : inventoryError
           ? 409
           : error instanceof ZohoConfigurationError
@@ -730,9 +923,9 @@ export async function createApplication(options = {}) {
       if (error?.details?.retryAfter) response.setHeader("Retry-After", String(error.details.retryAfter));
       sendJson(response, status, {
         error: {
-          code: error instanceof HttpError || inventoryError || zohoError || staffError ? error.code : "internal_error",
-          message: error instanceof HttpError || inventoryError || zohoError || staffError ? error.message : "The server could not complete this request.",
-          ...((error instanceof HttpError || inventoryError || staffError) && error.details ? { details: error.details } : {}),
+          code: error instanceof HttpError || inventoryError || zohoError || staffError || workFileError ? error.code : "internal_error",
+          message: error instanceof HttpError || inventoryError || zohoError || staffError || workFileError ? error.message : "The server could not complete this request.",
+          ...((error instanceof HttpError || inventoryError || staffError || workFileError) && error.details ? { details: error.details } : {}),
           ...(error instanceof ZohoConfigurationError && error.missing.length ? { details: { missingSettings: error.missing } } : {}),
           requestId
         }
@@ -740,5 +933,5 @@ export async function createApplication(options = {}) {
     }
   });
 
-  return { server, store, payments, zoho, processZohoOutbox };
+  return { server, store, payments, zoho, email, whatsapp, workFiles, processZohoOutbox };
 }

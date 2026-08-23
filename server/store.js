@@ -18,7 +18,7 @@ import {
   verifyStaffPassword
 } from "./staff.js";
 
-const DATA_VERSION = 5;
+const DATA_VERSION = 7;
 const MAX_STORED_EVENTS = 2000;
 const MAX_STORED_RESERVATIONS = 5000;
 const MAX_ZOHO_QUEUE = 5000;
@@ -100,6 +100,49 @@ const paymentStatusForOrder = (order) => {
 const monthKey = (value) => {
   const date = new Date(value);
   return Number.isNaN(date.valueOf()) ? "unknown" : date.toISOString().slice(0, 7);
+};
+
+const publicWorkFile = (file) => file ? {
+  id: file.id,
+  originalName: file.originalName,
+  mimeType: file.mimeType,
+  family: file.family,
+  kind: file.kind,
+  phase: file.phase || "completion",
+  size: file.size,
+  uploadedBy: file.uploadedBy,
+  uploadedByName: file.uploadedByName,
+  uploadedAt: file.uploadedAt,
+  downloadUrl: `/api/v1/staff/files/${encodeURIComponent(file.id)}`
+} : null;
+
+const publicStaffTask = (task) => {
+  const approval = task.approval ? {
+    approvedBy: task.approval.approvedBy,
+    approvedByName: task.approval.approvedByName,
+    approvedAt: task.approval.approvedAt,
+    note: task.approval.note || "",
+    approverPhotoUrl: task.approval.approverPhoto?.id
+      ? `/api/v1/staff/files/${encodeURIComponent(task.approval.approverPhoto.id)}`
+      : null,
+    approverSignatureUrl: task.approval.approverSignature?.id
+      ? `/api/v1/staff/files/${encodeURIComponent(task.approval.approverSignature.id)}`
+      : null
+  } : null;
+  return {
+    ...task,
+    attachments: (task.attachments || []).map(publicWorkFile),
+    approval,
+    notifications: (task.notifications || []).map((notification) => ({
+      event: notification.event,
+      status: notification.status,
+      provider: notification.provider,
+      recipientLast4: notification.recipientLast4 || null,
+      attemptedAt: notification.attemptedAt,
+      sentAt: notification.sentAt || null,
+      error: notification.error || null
+    }))
+  };
 };
 
 export class InventoryError extends Error {
@@ -236,6 +279,40 @@ export class JsonStore {
       if (!order.fulfillmentStatus) order.fulfillmentStatus = paidStatuses.has(order.status) ? "unfulfilled" : "not_ready";
       if (!Object.hasOwn(order, "assignedTo")) order.assignedTo = "";
       if (!Object.hasOwn(order, "fulfillmentUpdatedAt")) order.fulfillmentUpdatedAt = null;
+    }
+
+    for (const invitation of this.data.staffInvitations) {
+      if (!Object.hasOwn(invitation, "deliveryStatus")) {
+        invitation.deliveryStatus = "unknown";
+        needsPersist = true;
+      }
+      if (!Object.hasOwn(invitation, "deliveryProvider")) invitation.deliveryProvider = "";
+      if (!Object.hasOwn(invitation, "deliveryMessageId")) invitation.deliveryMessageId = "";
+      if (!Object.hasOwn(invitation, "deliveryAttemptedAt")) invitation.deliveryAttemptedAt = null;
+      if (!Object.hasOwn(invitation, "sentAt")) invitation.sentAt = null;
+      if (!Object.hasOwn(invitation, "deliveryError")) invitation.deliveryError = "";
+    }
+
+    for (const user of this.data.staffUsers) {
+      if (!Object.hasOwn(user, "phone")) user.phone = "";
+      if (!Object.hasOwn(user, "whatsappNumber")) user.whatsappNumber = "";
+      if (!Object.hasOwn(user, "jobTitle")) user.jobTitle = "";
+      if (!Object.hasOwn(user, "profilePhoto")) user.profilePhoto = null;
+      if (!Object.hasOwn(user, "signature")) user.signature = null;
+    }
+
+    for (const task of this.data.staffTasks) {
+      if (!Object.hasOwn(task, "scopeOfWork")) task.scopeOfWork = task.description || "";
+      if (!Array.isArray(task.evidenceRequirements)) task.evidenceRequirements = [];
+      if (!Array.isArray(task.attachments)) task.attachments = [];
+      if (!Array.isArray(task.notifications)) task.notifications = [];
+      if (!Array.isArray(task.reviewHistory)) task.reviewHistory = [];
+      if (!Object.hasOwn(task, "submittedBy")) task.submittedBy = "";
+      if (!Object.hasOwn(task, "submittedByName")) task.submittedByName = "";
+      if (!Object.hasOwn(task, "submittedAt")) task.submittedAt = null;
+      if (!Object.hasOwn(task, "submissionNote")) task.submissionNote = "";
+      if (!Object.hasOwn(task, "approval")) task.approval = null;
+      if (!Object.hasOwn(task, "reviewNote")) task.reviewNote = "";
     }
 
     if (this.data.payments.length === 0 && this.data.orders.length > 0) {
@@ -893,7 +970,22 @@ export class JsonStore {
   }
 
   listStaffUsers() {
-    return this.data.staffUsers.map(publicStaffUser).sort((left, right) => left.name.localeCompare(right.name));
+    return this.data.staffUsers.map((user) => {
+      const invitation = this.data.staffInvitations.find((item) => item.userId === user.id);
+      return {
+        ...publicStaffUser(user),
+        invitationDelivery: invitation ? {
+          invitationId: invitation.id,
+          status: invitation.deliveryStatus || "unknown",
+          provider: invitation.deliveryProvider || null,
+          attemptedAt: invitation.deliveryAttemptedAt || null,
+          sentAt: invitation.sentAt || null,
+          error: invitation.deliveryError || null,
+          expiresAt: invitation.expiresAt,
+          usedAt: invitation.usedAt || null
+        } : null
+      };
+    }).sort((left, right) => left.name.localeCompare(right.name));
   }
 
   #createStaffInvitation(user, now = new Date()) {
@@ -903,18 +995,60 @@ export class JsonStore {
     for (const invitation of this.data.staffInvitations) {
       if (invitation.userId === user.id && !invitation.usedAt) invitation.usedAt = createdAt;
     }
-    this.data.staffInvitations.unshift({
+    const invitation = {
       id: randomUUID(),
       userId: user.id,
       tokenHash: hashOpaqueToken(token),
       createdAt,
       expiresAt,
-      usedAt: null
-    });
+      usedAt: null,
+      deliveryStatus: "pending",
+      deliveryProvider: "",
+      deliveryMessageId: "",
+      deliveryAttemptedAt: null,
+      sentAt: null,
+      deliveryError: ""
+    };
+    this.data.staffInvitations.unshift(invitation);
     user.invitedAt = createdAt;
     user.updatedAt = createdAt;
     if (!user.passwordHash) user.status = "invited";
-    return { token, expiresAt };
+    return { id: invitation.id, token, expiresAt };
+  }
+
+  async recordStaffInvitationDelivery(invitationId, outcome, actor = { id: "admin", name: "Owner admin", role: "owner" }) {
+    const invitation = this.data.staffInvitations.find((item) => item.id === invitationId);
+    if (!invitation) throw new StaffAccessError("Invitation not found.", "staff_invitation_not_found", 404);
+    const user = this.data.staffUsers.find((item) => item.id === invitation.userId);
+    const status = ["sent", "failed", "not_configured"].includes(outcome?.status) ? outcome.status : "failed";
+    const attemptedAt = cleanStaffText(outcome?.attemptedAt, 40) || new Date().toISOString();
+    invitation.deliveryStatus = status;
+    invitation.deliveryProvider = cleanStaffText(outcome?.provider, 40);
+    invitation.deliveryMessageId = cleanStaffText(outcome?.messageId, 160);
+    invitation.deliveryAttemptedAt = attemptedAt;
+    invitation.sentAt = status === "sent" ? (cleanStaffText(outcome?.sentAt, 40) || attemptedAt) : null;
+    invitation.deliveryError = status === "sent" ? "" : cleanStaffText(outcome?.error, 240);
+    this.#addAudit(actor, `staff.invitation_${status}`, "staff_user", invitation.userId, {
+      location: user?.locations?.join(",") || "",
+      summary: status === "sent"
+        ? `The staff invitation for ${user?.name || "an employee"} was emailed.`
+        : `The staff invitation email for ${user?.name || "an employee"} was not delivered.`,
+      metadata: {
+        invitationId: invitation.id,
+        provider: invitation.deliveryProvider,
+        deliveryStatus: status,
+        messageId: invitation.deliveryMessageId
+      }
+    });
+    await this.persist();
+    return {
+      invitationId: invitation.id,
+      status,
+      provider: invitation.deliveryProvider || null,
+      attemptedAt: invitation.deliveryAttemptedAt,
+      sentAt: invitation.sentAt,
+      error: invitation.deliveryError || null
+    };
   }
 
   async createStaffUser(input, actor = { id: "admin", name: "Owner admin", role: "owner" }) {
@@ -932,10 +1066,15 @@ export class JsonStore {
       employeeNumber: this.#employeeNumber(value.role),
       name: value.name,
       email: value.email,
+      phone: value.phone,
+      whatsappNumber: value.whatsappNumber,
+      jobTitle: value.jobTitle,
       role: value.role,
       country: value.country || (value.locations.includes("liberia") ? "Liberia" : "United States"),
       locations: value.locations,
       managerId: value.managerId,
+      profilePhoto: null,
+      signature: null,
       status: "invited",
       passwordHash: "",
       failedLoginCount: 0,
@@ -976,6 +1115,9 @@ export class JsonStore {
     const merged = {
       name: Object.hasOwn(input || {}, "name") ? input.name : user.name,
       email: Object.hasOwn(input || {}, "email") ? input.email : user.email,
+      phone: Object.hasOwn(input || {}, "phone") ? input.phone : user.phone,
+      whatsappNumber: Object.hasOwn(input || {}, "whatsappNumber") ? input.whatsappNumber : user.whatsappNumber,
+      jobTitle: Object.hasOwn(input || {}, "jobTitle") ? input.jobTitle : user.jobTitle,
       role: Object.hasOwn(input || {}, "role") ? input.role : user.role,
       country: Object.hasOwn(input || {}, "country") ? input.country : user.country,
       locations: Object.hasOwn(input || {}, "locations") ? input.locations : user.locations,
@@ -998,6 +1140,9 @@ export class JsonStore {
     Object.assign(user, {
       name: value.name,
       email: value.email,
+      phone: value.phone,
+      whatsappNumber: value.whatsappNumber,
+      jobTitle: value.jobTitle,
       role: value.role,
       country: value.country,
       locations: value.locations,
@@ -1257,7 +1402,7 @@ export class JsonStore {
   staffTasks(actor, limit = 250) {
     if (!hasStaffPermission(actor, "tasks.view")) return [];
     const safeLimit = Math.max(1, Math.min(Number(limit) || 250, 500));
-    return this.data.staffTasks.filter((task) => this.#taskVisibleTo(actor, task)).slice(0, safeLimit);
+    return this.data.staffTasks.filter((task) => this.#taskVisibleTo(actor, task)).slice(0, safeLimit).map(publicStaffTask);
   }
 
   async createStaffTask(actor, input) {
@@ -1265,12 +1410,14 @@ export class JsonStore {
     const location = cleanStaffText(input?.location, 20).toLowerCase();
     const type = cleanStaffText(input?.type || "general", 30).toLowerCase();
     const title = cleanStaffText(input?.title, 140);
+    const scopeOfWork = cleanStaffText(input?.scopeOfWork || input?.description, 5000);
     const priority = cleanStaffText(input?.priority || "normal", 20).toLowerCase();
     const allowedTypes = new Set(["receiving", "quality", "packing", "stock_count", "transfer", "fulfillment", "returns", "support", "finance", "general"]);
     if (location !== "both" && !canAccessStaffLocation(actor, location)) throw new StaffAccessError("This location is outside your assignment.");
     if (location === "both" && actor.role !== "owner") throw new StaffAccessError("Only an owner can create a cross-location task.");
     if (!allowedTypes.has(type)) throw new StaffAccessError("Choose a valid task type.", "invalid_task_type", 422);
     if (title.length < 3) throw new StaffAccessError("Enter a clear task title.", "invalid_task_title", 422);
+    if (scopeOfWork.length < 10) throw new StaffAccessError("Add a clear Scope of Work before creating the task.", "invalid_scope_of_work", 422);
     if (!["normal", "urgent"].includes(priority)) throw new StaffAccessError("Choose normal or urgent priority.", "invalid_priority", 422);
     const assignedTo = cleanStaffText(input?.assignedTo, 80);
     if (assignedTo) {
@@ -1288,10 +1435,19 @@ export class JsonStore {
       dueAt = parsedDueAt.toISOString();
     }
     const now = new Date().toISOString();
+    const allowedEvidence = new Set(["document", "photo", "video"]);
+    const requestedEvidence = Array.isArray(input?.evidenceRequirements)
+      ? [...new Set(input.evidenceRequirements.map((value) => cleanStaffText(value, 20).toLowerCase()))]
+      : [];
+    if (requestedEvidence.some((value) => !allowedEvidence.has(value))) {
+      throw new StaffAccessError("Choose valid document, photo, or video evidence requirements.", "invalid_evidence_requirements", 422);
+    }
     const task = {
       id: randomUUID(),
       title,
       description: cleanStaffText(input?.description, 1000),
+      scopeOfWork,
+      evidenceRequirements: requestedEvidence.length ? requestedEvidence : ["document", "photo"],
       type,
       location,
       priority,
@@ -1301,6 +1457,15 @@ export class JsonStore {
       createdByName: actor.name,
       dueAt,
       note: "",
+      attachments: [],
+      notifications: [],
+      reviewHistory: [],
+      submittedBy: "",
+      submittedByName: "",
+      submittedAt: null,
+      submissionNote: "",
+      reviewNote: "",
+      approval: null,
       createdAt: now,
       updatedAt: now,
       completedAt: null
@@ -1313,7 +1478,7 @@ export class JsonStore {
       metadata: { type, assignedTo, priority }
     });
     await this.persist();
-    return task;
+    return publicStaffTask(task);
   }
 
   async updateStaffTask(actor, taskId, input) {
@@ -1322,7 +1487,11 @@ export class JsonStore {
     if (!task || !this.#taskVisibleTo(actor, task)) throw new StaffAccessError("Task not found.", "task_not_found", 404);
     const manager = hasStaffPermission(actor, "tasks.manage");
     const status = Object.hasOwn(input || {}, "status") ? cleanStaffText(input.status, 20).toLowerCase() : task.status;
-    if (!["open", "in_progress", "blocked", "completed"].includes(status)) throw new StaffAccessError("Choose a valid task status.", "invalid_task_status", 422);
+    if (!["open", "in_progress", "blocked", "changes_requested"].includes(status)) {
+      throw new StaffAccessError("Tasks are completed only after manager approval.", "task_approval_required", 409);
+    }
+    if (task.status === "pending_approval") throw new StaffAccessError("This task is waiting for manager approval.", "task_pending_approval", 409);
+    if (task.status === "completed") throw new StaffAccessError("A completed task cannot be reopened from the work queue.", "task_completed", 409);
     if (!manager && task.assignedTo && task.assignedTo !== actor.id) throw new StaffAccessError("This task is assigned to another employee.");
     if (!manager && Object.hasOwn(input || {}, "assignedTo") && input.assignedTo !== actor.id) throw new StaffAccessError("You can only claim a task for yourself.");
     if (Object.hasOwn(input || {}, "assignedTo")) {
@@ -1343,14 +1512,270 @@ export class JsonStore {
     task.status = status;
     task.note = Object.hasOwn(input || {}, "note") ? cleanStaffText(input.note, 800) : task.note;
     task.updatedAt = new Date().toISOString();
-    task.completedAt = status === "completed" ? task.updatedAt : null;
+    task.completedAt = null;
     this.#addAudit(actor, "task.updated", "staff_task", task.id, {
       location: task.location,
       summary: `${task.title} moved to ${status.replaceAll("_", " ")}.`,
       metadata: { status, assignedTo: task.assignedTo }
     });
     await this.persist();
-    return task;
+    return publicStaffTask(task);
+  }
+
+  staffDirectory(actor) {
+    if (!hasStaffPermission(actor, "directory.view")) return [];
+    return this.data.staffUsers
+      .filter((user) => user.status === "active" || user.id === actor.id)
+      .map((user) => {
+        const profile = publicStaffUser(user);
+        return {
+          id: profile.id,
+          employeeNumber: profile.employeeNumber,
+          name: profile.name,
+          email: profile.email,
+          phone: profile.phone,
+          whatsappNumber: profile.whatsappNumber,
+          jobTitle: profile.jobTitle,
+          role: profile.role,
+          roleLabel: profile.roleLabel,
+          locations: profile.locations,
+          managerId: profile.managerId,
+          profilePhotoUrl: profile.profilePhotoUrl
+        };
+      })
+      .sort((left, right) => left.name.localeCompare(right.name));
+  }
+
+  async updateOwnStaffProfile(actor, input) {
+    if (!hasStaffPermission(actor, "profile.update")) throw new StaffAccessError("You cannot update this staff profile.");
+    const user = this.data.staffUsers.find((item) => item.id === actor.id);
+    if (!user) throw new StaffAccessError("Employee not found.", "staff_not_found", 404);
+    const merged = {
+      name: user.name,
+      email: user.email,
+      phone: Object.hasOwn(input || {}, "phone") ? input.phone : user.phone,
+      whatsappNumber: Object.hasOwn(input || {}, "whatsappNumber") ? input.whatsappNumber : user.whatsappNumber,
+      jobTitle: Object.hasOwn(input || {}, "jobTitle") ? input.jobTitle : user.jobTitle,
+      role: user.role,
+      country: user.country,
+      locations: user.locations,
+      managerId: user.managerId,
+      status: user.status
+    };
+    const value = validateStaffUserInput(merged);
+    user.phone = value.phone;
+    user.whatsappNumber = value.whatsappNumber;
+    user.jobTitle = value.jobTitle;
+    user.updatedAt = new Date().toISOString();
+    this.#addAudit(actor, "staff.profile_updated", "staff_user", user.id, {
+      location: user.locations.join(","),
+      summary: `${user.name} updated their staff contact profile.`
+    });
+    await this.persist();
+    return publicStaffUser(user);
+  }
+
+  async attachStaffProfileFile(actor, file) {
+    if (!hasStaffPermission(actor, "profile.update")) throw new StaffAccessError("You cannot update this staff profile.");
+    if (!["profile_photo", "signature"].includes(file?.kind)) throw new StaffAccessError("Choose a profile photo or signature image.", "invalid_profile_file", 422);
+    const user = this.data.staffUsers.find((item) => item.id === actor.id);
+    if (!user) throw new StaffAccessError("Employee not found.", "staff_not_found", 404);
+    const now = new Date().toISOString();
+    const record = { ...file, uploadedBy: actor.id, uploadedByName: actor.name, uploadedAt: now };
+    if (file.kind === "profile_photo") user.profilePhoto = record;
+    else user.signature = record;
+    user.updatedAt = now;
+    this.#addAudit(actor, `staff.${file.kind}_uploaded`, "staff_user", user.id, {
+      location: user.locations.join(","),
+      summary: `${user.name} uploaded a ${file.kind === "signature" ? "manager signature" : "profile photo"}.`
+    });
+    await this.persist();
+    return {
+      user: publicStaffUser(user),
+      file: publicWorkFile(record),
+      signatureUrl: user.signature?.id ? `/api/v1/staff/files/${encodeURIComponent(user.signature.id)}` : null
+    };
+  }
+
+  async attachStaffTaskFile(actor, taskId, file, phase = "completion") {
+    if (!hasStaffPermission(actor, "tasks.update")) throw new StaffAccessError("You cannot upload task files.");
+    const task = this.data.staffTasks.find((item) => item.id === taskId);
+    if (!task || !this.#taskVisibleTo(actor, task)) throw new StaffAccessError("Task not found.", "task_not_found", 404);
+    if (["pending_approval", "completed"].includes(task.status)) {
+      throw new StaffAccessError("Files are locked while a task is pending approval or completed.", "task_files_locked", 409);
+    }
+    const normalizedPhase = cleanStaffText(phase, 20).toLowerCase();
+    if (!["scope", "completion"].includes(normalizedPhase)) throw new StaffAccessError("Choose a valid file phase.", "invalid_file_phase", 422);
+    const manager = hasStaffPermission(actor, "tasks.manage");
+    if (normalizedPhase === "scope" && !manager) throw new StaffAccessError("Only a manager can add SOW and reference files.");
+    if (normalizedPhase === "completion") {
+      if (task.assignedTo && task.assignedTo !== actor.id) throw new StaffAccessError("Completion evidence must be uploaded by the assigned employee.");
+      if (!task.assignedTo) task.assignedTo = actor.id;
+    }
+    const now = new Date().toISOString();
+    const record = {
+      ...file,
+      phase: normalizedPhase,
+      uploadedBy: actor.id,
+      uploadedByName: actor.name,
+      uploadedAt: now
+    };
+    task.attachments = Array.isArray(task.attachments) ? task.attachments : [];
+    task.attachments.push(record);
+    if (normalizedPhase === "completion" && ["open", "changes_requested"].includes(task.status)) task.status = "in_progress";
+    task.updatedAt = now;
+    this.#addAudit(actor, "task.file_uploaded", "staff_task", task.id, {
+      location: task.location,
+      summary: `${actor.name} uploaded ${record.originalName} to ${task.title}.`,
+      metadata: { fileId: record.id, kind: record.kind, phase: normalizedPhase, size: record.size }
+    });
+    await this.persist();
+    return publicStaffTask(task);
+  }
+
+  async submitStaffTaskForApproval(actor, taskId, input) {
+    if (!hasStaffPermission(actor, "tasks.update")) throw new StaffAccessError("You cannot submit this task.");
+    const task = this.data.staffTasks.find((item) => item.id === taskId);
+    if (!task || !this.#taskVisibleTo(actor, task)) throw new StaffAccessError("Task not found.", "task_not_found", 404);
+    if (task.assignedTo !== actor.id) throw new StaffAccessError("Only the assigned employee can submit this task for approval.");
+    if (!["in_progress", "changes_requested"].includes(task.status)) {
+      throw new StaffAccessError("Start the task and upload evidence before submitting it.", "task_not_ready", 409);
+    }
+    const completionFiles = (task.attachments || []).filter((file) => file.phase === "completion");
+    const missing = (task.evidenceRequirements || []).filter((requirement) => !completionFiles.some((file) => file.family === requirement));
+    if (!completionFiles.length || missing.length) {
+      const labels = (missing.length ? missing : ["work evidence"]).join(", ");
+      throw new StaffAccessError(`Upload the required ${labels} before submitting this task.`, "task_evidence_required", 409);
+    }
+    const submissionNote = cleanStaffText(input?.submissionNote, 1200);
+    if (submissionNote.length < 3) throw new StaffAccessError("Add a completion note for the reviewing manager.", "submission_note_required", 422);
+    const now = new Date().toISOString();
+    task.status = "pending_approval";
+    task.submittedBy = actor.id;
+    task.submittedByName = actor.name;
+    task.submittedAt = now;
+    task.submissionNote = submissionNote;
+    task.reviewNote = "";
+    task.approval = null;
+    task.updatedAt = now;
+    this.#addAudit(actor, "task.submitted_for_approval", "staff_task", task.id, {
+      location: task.location,
+      summary: `${task.title} was submitted for manager approval.`,
+      metadata: { attachmentCount: completionFiles.length, evidenceRequirements: task.evidenceRequirements }
+    });
+    await this.persist();
+    return publicStaffTask(task);
+  }
+
+  async reviewStaffTask(actor, taskId, input) {
+    if (!hasStaffPermission(actor, "tasks.approve")) throw new StaffAccessError("You cannot approve staff tasks.");
+    const task = this.data.staffTasks.find((item) => item.id === taskId);
+    if (!task || !this.#taskVisibleTo(actor, task)) throw new StaffAccessError("Task not found.", "task_not_found", 404);
+    if (task.status !== "pending_approval") throw new StaffAccessError("This task is not waiting for approval.", "task_not_pending", 409);
+    if (task.submittedBy === actor.id) throw new StaffAccessError("A different manager must approve this task.", "second_approver_required", 409);
+    const decision = cleanStaffText(input?.decision, 30).toLowerCase();
+    if (!["approve", "request_changes"].includes(decision)) throw new StaffAccessError("Choose approve or request changes.", "invalid_task_decision", 422);
+    const reviewNote = cleanStaffText(input?.reviewNote, 1200);
+    if (decision === "request_changes" && reviewNote.length < 3) {
+      throw new StaffAccessError("Explain what must change before resubmission.", "review_note_required", 422);
+    }
+    const reviewer = this.data.staffUsers.find((item) => item.id === actor.id);
+    if (decision === "approve" && (!reviewer?.profilePhoto?.id || !reviewer?.signature?.id)) {
+      throw new StaffAccessError("Upload your manager photo and signature in My profile before approving work.", "approver_profile_required", 409);
+    }
+    const now = new Date().toISOString();
+    task.reviewNote = reviewNote;
+    task.reviewHistory = Array.isArray(task.reviewHistory) ? task.reviewHistory : [];
+    task.reviewHistory.unshift({
+      id: randomUUID(),
+      decision,
+      reviewedBy: actor.id,
+      reviewedByName: actor.name,
+      note: reviewNote,
+      reviewedAt: now
+    });
+    if (decision === "approve") {
+      task.status = "completed";
+      task.completedAt = now;
+      task.approval = {
+        approvedBy: actor.id,
+        approvedByName: actor.name,
+        approvedAt: now,
+        note: reviewNote,
+        approverPhoto: { ...reviewer.profilePhoto },
+        approverSignature: { ...reviewer.signature }
+      };
+    } else {
+      task.status = "changes_requested";
+      task.completedAt = null;
+      task.approval = null;
+    }
+    task.updatedAt = now;
+    this.#addAudit(actor, decision === "approve" ? "task.approved" : "task.changes_requested", "staff_task", task.id, {
+      location: task.location,
+      summary: decision === "approve" ? `${task.title} was approved and completed.` : `Changes were requested for ${task.title}.`,
+      metadata: { submittedBy: task.submittedBy, attachmentCount: (task.attachments || []).length }
+    });
+    await this.persist();
+    return publicStaffTask(task);
+  }
+
+  staffFile(actor, fileId) {
+    for (const task of this.data.staffTasks) {
+      if (!this.#taskVisibleTo(actor, task)) continue;
+      const attachment = (task.attachments || []).find((file) => file.id === fileId);
+      if (attachment) return attachment;
+      if (task.approval?.approverPhoto?.id === fileId) return task.approval.approverPhoto;
+      if (task.approval?.approverSignature?.id === fileId) return task.approval.approverSignature;
+    }
+    for (const user of this.data.staffUsers) {
+      if (user.profilePhoto?.id === fileId && hasStaffPermission(actor, "directory.view")) return user.profilePhoto;
+      if (user.id === actor.id && user.signature?.id === fileId) return user.signature;
+    }
+    throw new StaffAccessError("Work file not found.", "work_file_not_found", 404);
+  }
+
+  staffTaskNotificationContact(taskId, event) {
+    const task = this.data.staffTasks.find((item) => item.id === taskId);
+    if (!task) return null;
+    let user = null;
+    if (event === "assigned") user = this.data.staffUsers.find((item) => item.id === task.assignedTo && item.status === "active");
+    if (event === "submitted") {
+      const submitter = this.data.staffUsers.find((item) => item.id === task.submittedBy);
+      user = this.data.staffUsers.find((item) => item.id === submitter?.managerId && item.status === "active" && hasStaffPermission(item, "tasks.approve"));
+      if (!user) user = this.data.staffUsers.find((item) => item.id === task.createdBy && item.status === "active" && hasStaffPermission(item, "tasks.approve"));
+      if (!user) user = this.data.staffUsers.find((item) => item.status === "active" && hasStaffPermission(item, "tasks.approve") && (task.location === "both" || canAccessStaffLocation(item, task.location)));
+    }
+    if (["approved", "changes_requested"].includes(event)) {
+      user = this.data.staffUsers.find((item) => item.id === task.submittedBy && item.status === "active");
+    }
+    return user ? { id: user.id, name: user.name, whatsappNumber: user.whatsappNumber || "" } : null;
+  }
+
+  async recordStaffTaskNotification(taskId, event, outcome) {
+    const task = this.data.staffTasks.find((item) => item.id === taskId);
+    if (!task) return null;
+    task.notifications = Array.isArray(task.notifications) ? task.notifications : [];
+    const record = {
+      event: cleanStaffText(event, 40),
+      status: ["sent", "failed", "not_configured", "missing_contact"].includes(outcome?.status) ? outcome.status : "failed",
+      provider: cleanStaffText(outcome?.provider, 60),
+      providerMessageId: cleanStaffText(outcome?.messageId, 180),
+      recipientLast4: cleanStaffText(outcome?.recipientLast4, 4),
+      attemptedAt: cleanStaffText(outcome?.attemptedAt, 40) || new Date().toISOString(),
+      sentAt: cleanStaffText(outcome?.sentAt, 40) || null,
+      error: cleanStaffText(outcome?.error, 240)
+    };
+    task.notifications.unshift(record);
+    task.notifications = task.notifications.slice(0, 30);
+    task.updatedAt = record.attemptedAt;
+    this.#addAudit({ id: "system", name: "WhatsApp notifications", role: "system" }, `task.whatsapp_${record.status}`, "staff_task", task.id, {
+      location: task.location,
+      summary: record.status === "sent" ? `A WhatsApp task update was sent for ${task.title}.` : `A WhatsApp task update was not sent for ${task.title}.`,
+      metadata: { event: record.event, status: record.status, recipientLast4: record.recipientLast4 }
+    });
+    await this.persist();
+    return record;
   }
 
   staffTransfers(actor, limit = 200) {
@@ -1625,10 +2050,15 @@ export class JsonStore {
     const inventory = this.staffInventoryReport(actor);
     const stockCounts = this.staffStockCounts(actor);
     const orders = this.staffOrders(actor);
+    const publicUser = publicStaffUser(actor);
     return {
-      user: publicStaffUser(actor),
+      user: {
+        ...publicUser,
+        signatureUrl: actor.signature?.id ? `/api/v1/staff/files/${encodeURIComponent(actor.signature.id)}` : null
+      },
       summary: {
         openTasks: tasks.filter((task) => task.status !== "completed").length,
+        pendingApprovals: tasks.filter((task) => task.status === "pending_approval").length,
         urgentTasks: tasks.filter((task) => task.priority === "urgent" && task.status !== "completed").length,
         activeTransfers: transfers.filter((transfer) => !["received", "cancelled"].includes(transfer.status)).length,
         pendingCounts: stockCounts.filter((count) => ["submitted", "approved_pending_zoho"].includes(count.status)).length,
@@ -1636,6 +2066,7 @@ export class JsonStore {
         lowStock: inventory.filter((item) => ["low_stock", "sold_out"].includes(item.status)).length
       },
       tasks,
+      directory: this.staffDirectory(actor),
       transfers,
       inventory,
       stockCounts,

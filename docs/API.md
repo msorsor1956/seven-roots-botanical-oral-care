@@ -169,8 +169,10 @@ The browser dashboard at `/admin` uses these endpoints. The key is held in `sess
 
 ### Employee administration
 
-The owner bootstrap key manages individual staff accounts. Invitation tokens are returned only when created and should be copied immediately.
+The owner bootstrap key manages individual staff accounts. Creating or replacing an invitation sends the activation link to the employee through the configured transactional email provider. The one-time URL is also returned once as an owner recovery copy; only its hash is stored.
 
+- `GET /api/v1/admin/email/status`
+- `GET /api/v1/admin/whatsapp/status`
 - `GET /api/v1/admin/staff/roles`
 - `GET /api/v1/admin/staff`
 - `POST /api/v1/admin/staff`
@@ -194,6 +196,10 @@ Content-Type: application/json
 }
 ```
 
+A successful create response includes `delivery.status: "sent"`, the provider name, and delivery timestamps. If email is not configured or the provider rejects delivery, the employee and one-time URL are still created and `delivery.status` is `not_configured` or `failed`. The admin directory shows the latest attempt and can issue an emailed replacement invitation.
+
+`GET /api/v1/admin/email/status` reports whether `RESEND_API_KEY`, a valid `EMAIL_FROM`, and the optional `EMAIL_REPLY_TO` are ready. Secret values are never returned. `PUBLIC_BASE_URL` supplies the trusted activation-link origin in production.
+
 Available roles are `owner`, `liberia_manager`, `liberia_staff`, `us_manager`, `us_fulfillment`, `finance`, `customer_support`, and `auditor`. Each role has a fixed backend permission set and permitted location assignment. Deactivating a user revokes every active session.
 
 ## Staff authentication and operations
@@ -210,8 +216,15 @@ Authentication:
 Operations:
 
 - `GET /api/v1/staff/workspace`
+- `PATCH /api/v1/staff/profile`
+- `POST /api/v1/staff/profile/files/profile_photo`
+- `POST /api/v1/staff/profile/files/signature`
+- `GET /api/v1/staff/files/:fileId`
 - `POST /api/v1/staff/tasks`
 - `PATCH /api/v1/staff/tasks/:taskId`
+- `POST /api/v1/staff/tasks/:taskId/files`
+- `POST /api/v1/staff/tasks/:taskId/submit`
+- `POST /api/v1/staff/tasks/:taskId/review`
 - `POST /api/v1/staff/inventory/counts`
 - `POST /api/v1/staff/inventory/counts/:countId/review`
 - `POST /api/v1/staff/transfers`
@@ -219,6 +232,14 @@ Operations:
 - `POST /api/v1/staff/transfers/:transferId/dispatch`
 - `POST /api/v1/staff/transfers/:transferId/receive`
 - `PATCH /api/v1/staff/orders/:orderId/fulfillment`
+
+### Task evidence and approval
+
+Task creation requires `scopeOfWork` and may provide `evidenceRequirements` containing `document`, `photo`, and/or `video`. If omitted, document and photo evidence are required. Direct `completed` status updates are rejected. The assigned employee uploads every required evidence family, sends `submissionNote` to `/submit`, and the task becomes `pending_approval`. A different user with `tasks.approve` sends `decision: "approve"` or `decision: "request_changes"` to `/review`. Approval requires that reviewer's profile photo and signature.
+
+File uploads use the raw file as the request body with `Content-Type`, `X-File-Name`, `X-File-Kind`, `X-File-Phase`, and `X-CSRF-Token` headers. `X-File-Kind` is `sow`, `document`, `photo`, or `video`; `X-File-Phase` is `scope` or `completion`. Every returned file URL is private and requires an authorized staff session.
+
+The workspace includes the active employee contact directory, configured admin contact, WhatsApp readiness, and the current employee's profile readiness. Automatic Meta WhatsApp Cloud API task updates are best effort: a provider or configuration failure is audited but does not roll back the task action.
 
 Example physical count:
 

@@ -49,7 +49,11 @@
     ? new Intl.NumberFormat(undefined, { style: 'currency', currency }).format(amount / 100)
     : '—';
   const statusLabel = (value) => String(value || 'unknown').replaceAll('_', ' ');
-  const statusIsAlert = (value) => !['paid', 'pending', 'in_stock', 'not_tracked', 'active', 'ready', 'synced'].includes(value);
+  const whatsappUrl = (number, message = '') => {
+    const digits = String(number || '').replace(/\D/g, '');
+    return digits ? `https://wa.me/${digits}${message ? `?text=${encodeURIComponent(message)}` : ''}` : '';
+  };
+  const statusIsAlert = (value) => !['paid', 'pending', 'in_stock', 'not_tracked', 'active', 'ready', 'synced', 'sent', 'accepted'].includes(value);
 
   const addCells = (row, values) => values.forEach((value) => {
     const cell = row.insertCell();
@@ -130,7 +134,7 @@
     if (!report.monthly.length) {
       const row = monthlyBody.insertRow();
       const cell = row.insertCell();
-      cell.colSpan = 5;
+      cell.colSpan = 6;
       cell.textContent = 'No completed payment periods yet.';
     }
     report.monthly.forEach((period) => {
@@ -232,6 +236,26 @@
         ? `Last inventory sync ${formatDate(status.lastSuccessAt)}.`
         : status.lastAttemptAt ? `Last connection check ${formatDate(status.lastAttemptAt)}.` : '';
     setStatus(qs('[data-zoho-status]'), message, Boolean(status.lastError));
+  };
+
+  const renderEmail = (status) => {
+    const badge = qs('[data-email-badge]');
+    badge.textContent = status.configured ? 'Invitation email ready' : 'Email setup required';
+    badge.classList.toggle('is-ready', status.configured);
+    badge.classList.toggle('is-alert', !status.configured);
+    qs('[data-email-note]').textContent = status.configured
+      ? `New and replacement staff invitations are sent automatically from ${status.from}. A recovery copy remains visible to the owner.`
+      : `Employee records can be created, but automatic invitation email needs these Railway settings: ${(status.missingSettings || []).join(', ') || 'RESEND_API_KEY and EMAIL_FROM'}.`;
+  };
+
+  const renderWhatsApp = (status) => {
+    const badge = qs('[data-whatsapp-badge]');
+    badge.textContent = status.configured ? 'WhatsApp active' : 'WhatsApp setup required';
+    badge.classList.toggle('is-ready', status.configured);
+    badge.classList.toggle('is-alert', !status.configured);
+    badge.title = status.configured
+      ? `Task notifications use ${status.taskTemplate}.`
+      : `Add ${(status.missingSettings || []).join(', ')} in Railway for automatic task notifications.`;
   };
 
   const renderInventory = (items) => {
@@ -400,7 +424,7 @@
     if (!items.length) {
       const row = body.insertRow();
       const cell = row.insertCell();
-      cell.colSpan = 5;
+      cell.colSpan = 7;
       cell.textContent = 'No one has joined the pre-launch list yet.';
       return;
     }
@@ -449,6 +473,10 @@
     const panel = qs('[data-staff-invite]');
     const input = qs('[data-staff-invite-url]');
     input.value = data.invitationUrl;
+    const delivery = data.delivery || { status: 'unknown' };
+    qs('[data-staff-invite-delivery]').textContent = delivery.status === 'sent'
+      ? `Emailed to ${data.user.email} · recovery link below`
+      : `Email ${statusLabel(delivery.status)} · copy this link to recover`;
     qs('[data-staff-invite-expiry]').textContent = `Expires ${formatDate(data.expiresAt)}`;
     panel.hidden = false;
     input.focus();
@@ -493,14 +521,87 @@
       email.href = `mailto:${user.email}`;
       email.textContent = user.email;
       const number = document.createElement('small');
-      number.textContent = user.employeeNumber;
+      number.textContent = [user.employeeNumber, user.jobTitle].filter(Boolean).join(' · ');
       identity.append(name, email, number);
+
+      const contactCell = row.insertCell();
+      contactCell.className = 'staff-contact-cell';
+      if (user.phone) {
+        const phone = document.createElement('a');
+        phone.href = `tel:${user.phone}`;
+        phone.textContent = user.phone;
+        contactCell.append(phone);
+      }
+      const waUrl = whatsappUrl(user.whatsappNumber, `Hello ${user.name}, this is a SEVEN ROOTS operations message.`);
+      if (waUrl) {
+        const whatsapp = document.createElement('a');
+        whatsapp.href = waUrl;
+        whatsapp.target = '_blank';
+        whatsapp.rel = 'noopener';
+        whatsapp.textContent = 'WhatsApp';
+        contactCell.append(whatsapp);
+      }
+      if (!user.phone && !waUrl) contactCell.textContent = 'Not added';
+      const editor = document.createElement('details');
+      editor.className = 'staff-contact-editor';
+      const editorSummary = document.createElement('summary');
+      editorSummary.textContent = 'Edit contact';
+      const editorForm = document.createElement('form');
+      const titleInput = document.createElement('input');
+      titleInput.value = user.jobTitle || '';
+      titleInput.placeholder = 'Job title';
+      titleInput.maxLength = 100;
+      titleInput.setAttribute('aria-label', `Job title for ${user.name}`);
+      const phoneInput = document.createElement('input');
+      phoneInput.value = user.phone || '';
+      phoneInput.placeholder = 'Phone';
+      phoneInput.maxLength = 40;
+      phoneInput.setAttribute('aria-label', `Phone number for ${user.name}`);
+      const whatsappInput = document.createElement('input');
+      whatsappInput.value = user.whatsappNumber || '';
+      whatsappInput.placeholder = 'WhatsApp +country code';
+      whatsappInput.maxLength = 40;
+      whatsappInput.setAttribute('aria-label', `WhatsApp number for ${user.name}`);
+      const contactSave = document.createElement('button');
+      contactSave.type = 'submit';
+      contactSave.textContent = 'Save contact';
+      editorForm.append(titleInput, phoneInput, whatsappInput, contactSave);
+      editorForm.addEventListener('submit', async (event) => {
+        event.preventDefault();
+        contactSave.disabled = true;
+        try {
+          await api(`/api/v1/admin/staff/${encodeURIComponent(user.id)}`, {
+            method: 'PATCH',
+            body: { jobTitle: titleInput.value, phone: phoneInput.value, whatsappNumber: whatsappInput.value }
+          });
+          await loadDashboard();
+          setStatus(qs('[data-staff-form-status]'), `${user.name}'s contact information was updated.`);
+        } catch (error) {
+          setStatus(qs('[data-staff-form-status]'), error.message, true);
+          contactSave.disabled = false;
+        }
+      });
+      editor.append(editorSummary, editorForm);
+      contactCell.append(editor);
 
       const roleCell = row.insertCell();
       roleCell.textContent = roleById.get(user.role)?.label || user.roleLabel;
       const locationsCell = row.insertCell();
       locationsCell.textContent = user.locations.map((location) => location === 'us' ? 'U.S.' : 'Liberia').join(', ');
       addStatusCell(row, user.status);
+
+      const deliveryCell = row.insertCell();
+      deliveryCell.className = 'invitation-delivery';
+      const delivery = user.invitationDelivery;
+      const deliveryStatus = delivery?.usedAt ? 'accepted' : delivery?.status || 'unknown';
+      const deliveryBadge = document.createElement('span');
+      deliveryBadge.className = `order-status${statusIsAlert(deliveryStatus) ? ' is-alert' : ''}`;
+      deliveryBadge.textContent = statusLabel(deliveryStatus);
+      const deliveryDetail = document.createElement('small');
+      deliveryDetail.textContent = delivery?.error || (delivery?.sentAt
+        ? formatDate(delivery.sentAt)
+        : delivery?.attemptedAt ? formatDate(delivery.attemptedAt) : 'No email attempt');
+      deliveryCell.append(deliveryBadge, deliveryDetail);
 
       const actionsCell = row.insertCell();
       const actions = document.createElement('div');
@@ -524,7 +625,7 @@
       });
       const invite = document.createElement('button');
       invite.type = 'button';
-      invite.textContent = user.status === 'invited' ? 'New link' : 'Reset access';
+      invite.textContent = user.status === 'invited' ? 'Email new invite' : 'Email reset';
       invite.disabled = user.status === 'inactive';
       invite.addEventListener('click', async () => {
         invite.disabled = true;
@@ -532,6 +633,9 @@
           const data = await api(`/api/v1/admin/staff/${encodeURIComponent(user.id)}/invitations`, { method: 'POST' });
           showStaffInvitation(data);
           await loadDashboard();
+          setStatus(qs('[data-staff-form-status]'), data.delivery?.status === 'sent'
+            ? `A new activation link was emailed to ${data.user.email}.`
+            : 'A new link was created, but email delivery needs attention.', data.delivery?.status !== 'sent');
         } catch (error) {
           setStatus(qs('[data-staff-form-status]'), error.message, true);
         } finally { invite.disabled = user.status === 'inactive'; }
@@ -543,10 +647,12 @@
 
   const loadDashboard = async () => {
     setStatus(dashboardStatus, 'Refreshing private commerce data…');
-    const [summary, financialReport, zohoStatus, inventory, payments, orders, waitlist, inquiries, staff, roles] = await Promise.all([
+    const [summary, financialReport, zohoStatus, emailStatus, whatsappStatus, inventory, payments, orders, waitlist, inquiries, staff, roles] = await Promise.all([
       api('/api/v1/admin/summary'),
       api('/api/v1/admin/financial-report'),
       api('/api/v1/admin/zoho/status'),
+      api('/api/v1/admin/email/status'),
+      api('/api/v1/admin/whatsapp/status'),
       api('/api/v1/admin/inventory'),
       api('/api/v1/admin/payments?limit=500'),
       api('/api/v1/admin/orders?limit=500'),
@@ -559,6 +665,8 @@
     renderSummary(summary);
     renderFinancialReport(financialReport);
     renderZoho(zohoStatus);
+    renderEmail(emailStatus);
+    renderWhatsApp(whatsappStatus);
     renderInventory(inventory);
     renderPayments(payments);
     renderOrders(orders);
@@ -614,13 +722,16 @@
     const form = new FormData(staffForm);
     const locations = form.getAll('locations').map(String);
     button.disabled = true;
-    setStatus(qs('[data-staff-form-status]'), 'Creating a secure one-time invitation...');
+    setStatus(qs('[data-staff-form-status]'), 'Creating the employee account and emailing a secure invitation…');
     try {
       const data = await api('/api/v1/admin/staff', {
         method: 'POST',
         body: {
           name: form.get('name'),
           email: form.get('email'),
+          jobTitle: form.get('jobTitle'),
+          phone: form.get('phone'),
+          whatsappNumber: form.get('whatsappNumber'),
           role: form.get('role'),
           country: form.get('country'),
           locations,
@@ -630,7 +741,9 @@
       staffForm.reset();
       showStaffInvitation(data);
       await loadDashboard();
-      setStatus(qs('[data-staff-form-status]'), `${data.user.name} was added. Copy the invitation link now.`);
+      setStatus(qs('[data-staff-form-status]'), data.delivery?.status === 'sent'
+        ? `${data.user.name} was added and the activation link was emailed to ${data.user.email}.`
+        : `${data.user.name} was added, but the email was not delivered. Copy the recovery link and check email settings.`, data.delivery?.status !== 'sent');
     } catch (error) {
       const detail = Object.values(error.details || {})[0];
       setStatus(qs('[data-staff-form-status]'), detail || error.message, true);

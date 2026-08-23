@@ -51,14 +51,21 @@
       <section class="data-panel staff-panel">
         <div class="panel-heading">
           <div><p class="eyebrow">People and permissions</p><h2>Staff operations</h2></div>
-          <a class="panel-link" href="staff" target="_blank" rel="noopener">Open staff portal</a>
+          <div class="staff-heading-actions">
+            <span class="email-badge" data-email-badge>Checking email</span>
+            <span class="email-badge" data-whatsapp-badge>Checking WhatsApp</span>
+            <a class="panel-link" href="staff" target="_blank" rel="noopener">Open staff portal</a>
+          </div>
         </div>
-        <p class="staff-help">Create an individual account for every employee. Roles limit both the work they can perform and the warehouse data they can see.</p>
+        <p class="staff-help" data-email-note>Create an individual account for every employee. The activation link is sent to their work email, while roles limit the work and warehouse data they can access.</p>
         <div class="staff-layout">
           <form class="staff-form" data-staff-form>
             <h3>Add employee</h3>
             <label><span>Full name</span><input name="name" autocomplete="name" required maxlength="120"></label>
             <label><span>Work email</span><input name="email" type="email" autocomplete="email" required maxlength="254"></label>
+            <label><span>Job title</span><input name="jobTitle" maxlength="100"></label>
+            <label><span>Phone number</span><input name="phone" type="tel" autocomplete="tel" maxlength="40"></label>
+            <label><span>WhatsApp number</span><input name="whatsappNumber" type="tel" autocomplete="tel" maxlength="40" placeholder="+231... or +1..."></label>
             <label><span>Role</span><select name="role" data-staff-role required><option value="">Choose a role</option></select></label>
             <label><span>Country</span><input name="country" autocomplete="country-name" maxlength="80"></label>
             <fieldset>
@@ -67,20 +74,20 @@
               <label><input type="checkbox" name="locations" value="us"> U.S. fulfillment</label>
             </fieldset>
             <label><span>Manager</span><select name="managerId" data-staff-manager><option value="">No manager selected</option></select></label>
-            <button type="submit">Create invitation</button>
+            <button type="submit">Invite and email</button>
             <p class="staff-form-status" data-staff-form-status role="status" aria-live="polite"></p>
           </form>
           <div class="staff-directory">
             <div class="staff-directory-heading"><h3>Employee directory</h3><span data-staff-total>0 employees</span></div>
             <div class="staff-invite" data-staff-invite hidden>
-              <div><strong>One-time invitation</strong><small data-staff-invite-expiry></small></div>
+              <div><strong>Recovery copy</strong><small data-staff-invite-delivery></small><small data-staff-invite-expiry></small></div>
               <input data-staff-invite-url readonly aria-label="One-time staff invitation URL">
               <button type="button" data-copy-staff-invite>Copy link</button>
             </div>
             <div class="table-scroll">
               <table class="staff-table">
-                <thead><tr><th>Employee</th><th>Role</th><th>Locations</th><th>Status</th><th>Access</th></tr></thead>
-                <tbody data-staff-body><tr><td colspan="5">Loading employees...</td></tr></tbody>
+                <thead><tr><th>Employee</th><th>Contact</th><th>Role</th><th>Locations</th><th>Status</th><th>Invitation</th><th>Access</th></tr></thead>
+                <tbody data-staff-body><tr><td colspan="7">Loading employees...</td></tr></tbody>
               </table>
             </div>
           </div>

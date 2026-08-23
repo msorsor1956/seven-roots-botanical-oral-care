@@ -27,7 +27,7 @@ export const STAFF_ROLES = Object.freeze({
       "staff.manage", "staff.view", "finance.view", "reports.export", "orders.view", "orders.fulfill",
       "inventory.view", "inventory.count", "inventory.approve", "inventory.adjust", "transfers.view",
       "transfers.create", "transfers.approve", "transfers.dispatch", "transfers.receive", "tasks.view",
-      "tasks.manage", "tasks.update", "audit.view", "integrations.manage"
+      "tasks.manage", "tasks.update", "tasks.approve", "directory.view", "profile.update", "audit.view", "integrations.manage"
     ]
   }),
   liberia_manager: Object.freeze({
@@ -38,7 +38,7 @@ export const STAFF_ROLES = Object.freeze({
     defaultLocations: ["liberia"],
     permissions: [
       "inventory.view", "inventory.count", "inventory.approve", "transfers.view", "transfers.create",
-      "transfers.dispatch", "tasks.view", "tasks.manage", "tasks.update"
+      "transfers.dispatch", "tasks.view", "tasks.manage", "tasks.update", "tasks.approve", "directory.view", "profile.update"
     ]
   }),
   liberia_staff: Object.freeze({
@@ -47,7 +47,7 @@ export const STAFF_ROLES = Object.freeze({
     description: "Completes assigned receiving, quality, packing, and physical count work.",
     allowedLocations: ["liberia"],
     defaultLocations: ["liberia"],
-    permissions: ["inventory.view", "inventory.count", "transfers.view", "tasks.view", "tasks.update"]
+    permissions: ["inventory.view", "inventory.count", "transfers.view", "tasks.view", "tasks.update", "directory.view", "profile.update"]
   }),
   us_manager: Object.freeze({
     id: "us_manager",
@@ -57,7 +57,7 @@ export const STAFF_ROLES = Object.freeze({
     defaultLocations: ["us"],
     permissions: [
       "orders.view", "orders.fulfill", "inventory.view", "inventory.count", "inventory.approve",
-      "transfers.view", "transfers.receive", "tasks.view", "tasks.manage", "tasks.update"
+      "transfers.view", "transfers.receive", "tasks.view", "tasks.manage", "tasks.update", "tasks.approve", "directory.view", "profile.update"
     ]
   }),
   us_fulfillment: Object.freeze({
@@ -66,7 +66,7 @@ export const STAFF_ROLES = Object.freeze({
     description: "Picks, packs, ships, receives, and completes assigned U.S. warehouse work.",
     allowedLocations: ["us"],
     defaultLocations: ["us"],
-    permissions: ["orders.view", "orders.fulfill", "inventory.view", "inventory.count", "transfers.view", "tasks.view", "tasks.update"]
+    permissions: ["orders.view", "orders.fulfill", "inventory.view", "inventory.count", "transfers.view", "tasks.view", "tasks.update", "directory.view", "profile.update"]
   }),
   finance: Object.freeze({
     id: "finance",
@@ -74,7 +74,7 @@ export const STAFF_ROLES = Object.freeze({
     description: "Reviews payment records and financial reports without warehouse write access.",
     allowedLocations: ["liberia", "us"],
     defaultLocations: ["liberia", "us"],
-    permissions: ["finance.view", "reports.export", "orders.view", "tasks.view", "tasks.update"]
+    permissions: ["finance.view", "reports.export", "orders.view", "tasks.view", "tasks.update", "directory.view", "profile.update"]
   }),
   customer_support: Object.freeze({
     id: "customer_support",
@@ -82,7 +82,7 @@ export const STAFF_ROLES = Object.freeze({
     description: "Reviews customer orders and completes support or return tasks without financial controls.",
     allowedLocations: ["us"],
     defaultLocations: ["us"],
-    permissions: ["orders.view", "tasks.view", "tasks.update"]
+    permissions: ["orders.view", "tasks.view", "tasks.update", "directory.view", "profile.update"]
   }),
   auditor: Object.freeze({
     id: "auditor",
@@ -90,7 +90,7 @@ export const STAFF_ROLES = Object.freeze({
     description: "Read-only access to assigned locations, reports, and operational history.",
     allowedLocations: ["liberia", "us"],
     defaultLocations: ["liberia", "us"],
-    permissions: ["finance.view", "orders.view", "inventory.view", "transfers.view", "tasks.view", "audit.view"]
+    permissions: ["finance.view", "orders.view", "inventory.view", "transfers.view", "tasks.view", "directory.view", "profile.update", "audit.view"]
   })
 });
 
@@ -118,6 +118,7 @@ export const cleanStaffText = (value, maxLength = 180) => String(value ?? "")
   .slice(0, maxLength);
 
 export const cleanStaffEmail = (value) => cleanStaffText(value, 254).toLowerCase();
+export const cleanStaffPhone = (value) => cleanStaffText(value, 40);
 
 export const roleCatalog = () => Object.values(STAFF_ROLES).map((role) => ({
   id: role.id,
@@ -146,11 +147,16 @@ export const publicStaffUser = (user) => {
     employeeNumber: user.employeeNumber,
     name: user.name,
     email: user.email,
+    phone: user.phone || "",
+    whatsappNumber: user.whatsappNumber || "",
+    jobTitle: user.jobTitle || "",
     role: user.role,
     roleLabel: role?.label || user.role,
     country: user.country,
     locations: staffLocations(user),
     managerId: user.managerId || "",
+    profilePhotoUrl: user.profilePhoto?.id ? `/api/v1/staff/files/${encodeURIComponent(user.profilePhoto.id)}` : null,
+    profileReady: Boolean(user.profilePhoto?.id && user.signature?.id),
     status: user.status,
     lastLoginAt: user.lastLoginAt || null,
     invitedAt: user.invitedAt || null,
@@ -170,6 +176,9 @@ export function validateStaffUserInput(input, { partial = false } = {}) {
   const value = {
     name: cleanStaffText(input?.name, 120),
     email: cleanStaffEmail(input?.email),
+    phone: cleanStaffPhone(input?.phone),
+    whatsappNumber: cleanStaffPhone(input?.whatsappNumber),
+    jobTitle: cleanStaffText(input?.jobTitle, 100),
     role,
     country: cleanStaffText(input?.country, 80),
     locations: requestedLocations,
@@ -182,6 +191,12 @@ export function validateStaffUserInput(input, { partial = false } = {}) {
   }
   if (!partial || Object.hasOwn(input || {}, "email")) {
     if (!emailPattern.test(value.email)) details.email = "Enter a valid work email address.";
+  }
+  if (value.phone && !/^\+?[0-9() .-]{7,24}$/u.test(value.phone)) {
+    details.phone = "Enter a valid employee phone number.";
+  }
+  if (value.whatsappNumber && !/^\+[1-9]\d{7,14}$/u.test(value.whatsappNumber)) {
+    details.whatsappNumber = "Enter the WhatsApp number in international format, such as +231... or +1....";
   }
   if (!partial || Object.hasOwn(input || {}, "role")) {
     if (!roleDefinition) details.role = "Choose a valid staff role.";

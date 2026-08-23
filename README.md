@@ -35,9 +35,11 @@ The Railway deployment serves the frontend and API from one Node process. The Gi
 - Atomic private JSON storage with restrictive file permissions
 - API-key protected admin endpoints
 - Private `/admin` commerce dashboard with orders, inventory controls, financial reports, payment records, leads, and CSV export
-- Individual employee accounts with expiring one-time invitations, password hashing, secure sessions, CSRF protection, lockout controls, and access deactivation
+- Individual employee accounts with automatically emailed, expiring one-time invitations, delivery records, password hashing, secure sessions, CSRF protection, lockout controls, and access deactivation
 - Role- and location-scoped `/staff` operations portal for Liberia warehouse, U.S. fulfillment, finance, support, audit, and ownership teams
 - Assigned work queues, two-person physical count approval, Liberia-to-U.S. transfer custody, paid-order fulfillment states, and append-only operational audit history
+- SOW-driven operations with private document, photo, and video uploads; required-evidence gates; manager review; and photo/signature-backed completion records
+- Authenticated employee/admin contact directory, WhatsApp click-to-chat, and provider-ready Meta WhatsApp Cloud API task notifications
 - Signed Stripe webhook processing with idempotent order numbers and a separate payment ledger
 - Optional per-format stock tracking with Checkout reservations, expiry release, low-stock states, and adjustment history
 - Connection-ready Zoho Inventory bridge with OAuth refresh, exact SKU validation, Liberia/U.S. location stock, and a safe activation gate
@@ -83,6 +85,19 @@ DATA_DIR=/data
 ADMIN_API_KEY=<a long random secret>
 ALLOWED_ORIGINS=https://msorsor1956.github.io,https://seven-roots-botanical-oral-care-production.up.railway.app
 PUBLIC_BASE_URL=https://seven-roots-botanical-oral-care-production.up.railway.app
+RESEND_API_KEY=<Resend server API key>
+EMAIL_FROM=SEVEN ROOTS <staff@your-verified-domain.example>
+EMAIL_REPLY_TO=<optional monitored reply address>
+MAX_TASK_FILE_MB=50
+ADMIN_CONTACT_NAME=SEVEN ROOTS Owner Admin
+ADMIN_CONTACT_EMAIL=<admin work email>
+ADMIN_CONTACT_PHONE=<admin phone>
+ADMIN_WHATSAPP_NUMBER=<international number beginning with +>
+WHATSAPP_ACCESS_TOKEN=<Meta system-user access token>
+WHATSAPP_PHONE_NUMBER_ID=<WhatsApp business phone number ID>
+WHATSAPP_GRAPH_VERSION=<current supported Graph API version, such as v23.0>
+WHATSAPP_TASK_TEMPLATE=<approved three-variable template name>
+WHATSAPP_TEMPLATE_LANGUAGE=en_US
 STRIPE_API_KEY=<restricted Stripe API key>
 STRIPE_WEBHOOK_SECRET=<Stripe endpoint signing secret>
 STRIPE_PRICE_TRAVEL_SLEEVE=<active one-time Price ID>
@@ -154,11 +169,22 @@ The `ADMIN_API_KEY` remains the owner recovery and bootstrap credential. Use it 
 
 1. Enter the employee's name and work email.
 2. Choose the least-privilege job role and permitted location. Location rules are enforced by the backend, not only hidden in the browser.
-3. Copy the one-time invitation URL immediately and send it to that employee through a trusted channel. Only its hash is stored, and a new invitation invalidates the previous one.
+3. Select **Invite and email**. The backend sends the one-time activation link to the employee's address and records its delivery status. The owner dashboard also shows a recovery copy; only the token hash is stored, and a new invitation invalidates the previous one.
 4. The employee opens the link, creates a password of at least 12 characters, and then works from `/staff`.
-5. Deactivate an employee from `/admin` as soon as access should end. Existing sessions are revoked.
+5. The employee completes **My profile** with phone, international WhatsApp number, and a profile photo. Managers and owners also upload a signature image before approving work.
+6. Deactivate an employee from `/admin` as soon as access should end. Existing sessions are revoked.
 
 Suggested operating assignment: Liberia warehouse staff submit receiving, quality, packing, and count work; a Liberia manager approves counts and dispatches replenishment; U.S. fulfillment receives transfers and advances paid orders through picking, packing, shipment, and delivery; finance and audit roles remain read-only for operational changes. Physical inventory counts require a different approving employee.
+
+Invitation delivery uses Resend's server-side email API. First add and verify a sender domain in Resend, then add `RESEND_API_KEY` and `EMAIL_FROM` to the Railway service variables and redeploy. A dedicated sending subdomain is recommended so transactional staff mail is isolated from other mail. If delivery is unavailable, the employee account and one-time link remain valid, the failure is shown in `/admin`, and **Email new invite** creates and sends a replacement link. See Resend's official [send-email API](https://resend.com/docs/api-reference/emails/send-email) and [domain verification](https://resend.com/docs/dashboard/domains/introduction) guides.
+
+### Run documented work and approvals
+
+Managers and owners create an operation from **Staff portal → My work**. Every operation requires a Scope of Work and an explicit evidence checklist. The creator can attach SOW/reference documents, photos, and video. The assigned employee claims or starts the work, uploads completion evidence, and submits a completion note. The task becomes **pending approval** and cannot be marked completed directly. A different authorized manager either requests changes or approves it. Approval records the manager's name, profile photo, signature image, note, and timestamp; the employee then sees a green completed seal.
+
+Work files are stored privately under `DATA_DIR/work-files` on the Railway volume. They are never served as public static assets: every download rechecks the staff session, task visibility, role, and location. Supported formats include PDF, Word, Excel, text/CSV, JPEG/PNG/WebP/HEIC, MP4/MOV/WebM. `MAX_TASK_FILE_MB` controls the per-file limit from 1–100 MB.
+
+WhatsApp always supports authenticated click-to-chat from employee and task cards after a WhatsApp number is added. For automatic assignment, submission, approval, and changes-requested notifications, configure the Meta WhatsApp Cloud API variables above and create an approved template containing exactly three body variables in this order: employee name, task title, task status. Provider credentials remain server-side. See Meta's official [Cloud API overview](https://developers.facebook.com/docs/whatsapp/cloud-api/) and [message templates guide](https://developers.facebook.com/docs/whatsapp/business-management-api/message-templates/).
 
 Railway configuration follows the official [Config as Code](https://docs.railway.com/config-as-code/reference), [healthcheck](https://docs.railway.com/deployments/healthchecks), and [public networking](https://docs.railway.com/networking/public-networking) guidance.
 

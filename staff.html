@@ -60,6 +60,7 @@
       <section class="metric-strip" aria-label="Work summary">
         <article><span>Open tasks</span><b data-metric="openTasks">0</b></article>
         <article><span>Urgent tasks</span><b data-metric="urgentTasks">0</b></article>
+        <article><span>Pending approval</span><b data-metric="pendingApprovals">0</b></article>
         <article><span>Active transfers</span><b data-metric="activeTransfers">0</b></article>
         <article><span>Orders to fulfill</span><b data-metric="ordersToFulfill">0</b></article>
         <article><span>Counts pending</span><b data-metric="pendingCounts">0</b></article>
@@ -72,18 +73,25 @@
         <button type="button" data-view="transfers">Transfers</button>
         <button type="button" data-view="orders">Orders</button>
         <button type="button" data-view="finance">Finance</button>
+        <button type="button" data-view="contacts">Contacts</button>
+        <button type="button" data-view="profile">My profile</button>
         <button type="button" data-view="audit">Audit</button>
       </nav>
 
       <section class="workspace-view" data-workspace-view="work">
-        <div class="view-heading"><div><h2>Work queue</h2><p>Claim open work, record progress, and leave a clear handoff note.</p></div></div>
+        <div class="view-heading"><div><h2>Work queue</h2><p>Follow the Scope of Work, upload required proof, and submit completed work to a manager for signed approval.</p></div></div>
         <form class="task-compose" data-task-form hidden>
           <label><span>Task title</span><input name="title" maxlength="140" required></label>
           <label><span>Type</span><select name="type"><option value="receiving">Receiving</option><option value="quality">Quality check</option><option value="packing">Packing</option><option value="stock_count">Stock count</option><option value="transfer">Transfer</option><option value="fulfillment">Fulfillment</option><option value="returns">Returns</option><option value="support">Support</option><option value="finance">Finance</option><option value="general">General</option></select></label>
           <label><span>Location</span><select name="location" data-task-location></select></label>
           <label><span>Priority</span><select name="priority"><option value="normal">Normal</option><option value="urgent">Urgent</option></select></label>
-          <label class="task-description"><span>Instructions</span><input name="description" maxlength="1000"></label>
-          <button type="submit">Add task</button>
+          <label><span>Assign employee</span><select name="assignedTo" data-task-assignee><option value="">Open to claim</option></select></label>
+          <label><span>Due date</span><input name="dueAt" type="datetime-local"></label>
+          <label class="task-description"><span>Scope of Work (SOW)</span><textarea name="scopeOfWork" maxlength="5000" required placeholder="Define the work, standards, deliverables, and completion conditions."></textarea></label>
+          <fieldset class="evidence-requirements"><legend>Required completion proof</legend><label><input type="checkbox" name="evidenceRequirements" value="document" checked> Document</label><label><input type="checkbox" name="evidenceRequirements" value="photo" checked> Photos</label><label><input type="checkbox" name="evidenceRequirements" value="video"> Video</label></fieldset>
+          <label class="task-files"><span>SOW documents</span><input name="sowFiles" type="file" accept=".pdf,.doc,.docx" multiple></label>
+          <label class="task-files"><span>Reference documents, photos, or video</span><input name="workFiles" type="file" accept=".pdf,.doc,.docx,.xls,.xlsx,.txt,.csv,image/*,video/mp4,video/webm,video/quicktime" multiple></label>
+          <button type="submit">Create operation</button>
         </form>
         <div class="task-list" data-task-list><p class="empty">Loading work...</p></div>
       </section>
@@ -117,6 +125,24 @@
       <section class="workspace-view" data-workspace-view="finance" hidden>
         <div class="view-heading"><div><h2>Financial overview</h2><p>Stripe-collected sales and refunds. Card data is never stored here.</p></div></div>
         <div class="finance-summary" data-staff-finance><p class="empty">Financial access is not assigned to this role.</p></div>
+      </section>
+
+      <section class="workspace-view" data-workspace-view="contacts" hidden>
+        <div class="view-heading"><div><h2>Employee contacts</h2><p>Company email, phone, management relationship, and direct WhatsApp communication for active team members.</p></div><span class="source-badge" data-whatsapp-status>WhatsApp readiness</span></div>
+        <div class="contact-list" data-contact-list><p class="empty">Loading employee contacts...</p></div>
+      </section>
+
+      <section class="workspace-view" data-workspace-view="profile" hidden>
+        <div class="view-heading"><div><h2>My contact and approval profile</h2><p>Managers must upload a clear profile photo and signature before approving completed work. Use an international WhatsApp number beginning with +.</p></div></div>
+        <form class="profile-form" data-profile-form>
+          <label><span>Job title</span><input name="jobTitle" maxlength="100"></label>
+          <label><span>Phone number</span><input name="phone" type="tel" maxlength="40" autocomplete="tel"></label>
+          <label><span>WhatsApp number</span><input name="whatsappNumber" type="tel" maxlength="40" autocomplete="tel" placeholder="+231... or +1..."></label>
+          <label><span>Profile photo</span><input name="profilePhoto" type="file" accept="image/jpeg,image/png,image/webp,image/heic,image/heif"></label>
+          <label><span>Signature image</span><input name="signature" type="file" accept="image/jpeg,image/png,image/webp"></label>
+          <div class="profile-proof"><figure><span>Photo</span><img data-profile-photo alt="Your staff profile" hidden><small data-profile-photo-empty>Not uploaded</small></figure><figure><span>Approval signature</span><img data-profile-signature alt="Your approval signature" hidden><small data-profile-signature-empty>Not uploaded</small></figure></div>
+          <button type="submit">Save profile</button>
+        </form>
       </section>
 
       <section class="workspace-view" data-workspace-view="audit" hidden>

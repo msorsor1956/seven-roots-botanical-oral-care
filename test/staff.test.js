@@ -11,9 +11,31 @@ const adminHeaders = {
   "content-type": "application/json"
 };
 
-async function withServer(run) {
+const unavailableEmail = () => ({
+  configured: false,
+  status: () => ({
+    provider: "resend",
+    configured: false,
+    from: null,
+    replyTo: null,
+    missingSettings: ["RESEND_API_KEY", "EMAIL_FROM"]
+  }),
+  async sendStaffInvitation() {
+    const error = new Error("Employee invitation email is not configured.");
+    error.code = "email_not_configured";
+    throw error;
+  }
+});
+
+async function withServer(run, options = {}) {
   const dataDir = await mkdtemp(path.join(tmpdir(), "seven-roots-staff-test-"));
-  const { server } = await createApplication({ rootDir: projectRoot, dataDir, adminApiKey: "test-admin-key" });
+  const { server } = await createApplication({
+    rootDir: projectRoot,
+    dataDir,
+    adminApiKey: "test-admin-key",
+    email: unavailableEmail(),
+    ...options
+  });
   await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
   const baseUrl = `http://127.0.0.1:${server.address().port}`;
   try {
@@ -35,6 +57,7 @@ const inviteEmployee = async (baseUrl, employee) => {
   const payload = await response.json();
   assert.equal(response.status, 201, JSON.stringify(payload));
   assert.equal(Object.hasOwn(payload.data.user, "passwordHash"), false);
+  assert.equal(payload.data.delivery.status, "not_configured");
   return {
     user: payload.data.user,
     token: new URL(payload.data.invitationUrl).searchParams.get("invite")
@@ -62,6 +85,210 @@ const staffFetch = (baseUrl, pathname, session, options = {}) => {
     ...(Object.hasOwn(options, "body") ? { body: JSON.stringify(options.body) } : {})
   });
 };
+
+const staffUpload = (baseUrl, pathname, session, { name, type, kind, phase, contents }) => fetch(`${baseUrl}${pathname}`, {
+  method: "POST",
+  headers: {
+    cookie: session.cookie,
+    "x-csrf-token": session.csrfToken,
+    "x-file-name": name,
+    "x-file-kind": kind,
+    "x-file-phase": phase,
+    "content-type": type
+  },
+  body: contents
+});
+
+test("admin employee invitations are emailed and delivery records remain visible", async () => {
+  const deliveries = [];
+  const email = {
+    configured: true,
+    status: () => ({
+      provider: "resend",
+      configured: true,
+      from: "SEVEN ROOTS <staff@updates.sevenroots.example>",
+      replyTo: null,
+      missingSettings: []
+    }),
+    async sendStaffInvitation(input) {
+      deliveries.push(input);
+      return {
+        provider: "resend",
+        messageId: `email_${deliveries.length}`,
+        sentAt: "2026-08-20T18:00:00.000Z"
+      };
+    }
+  };
+
+  await withServer(async (baseUrl) => {
+    const emailStatus = await fetch(`${baseUrl}/api/v1/admin/email/status`, { headers: adminHeaders });
+    assert.equal(emailStatus.status, 200);
+    assert.equal((await emailStatus.json()).data.configured, true);
+
+    const created = await fetch(`${baseUrl}/api/v1/admin/staff`, json("POST", {
+      name: "Martha Kromah",
+      email: "martha@example.com",
+      role: "liberia_staff",
+      country: "Liberia",
+      locations: ["liberia"]
+    }, adminHeaders));
+    const createdPayload = await created.json();
+    assert.equal(created.status, 201, JSON.stringify(createdPayload));
+    assert.equal(createdPayload.data.delivery.status, "sent");
+    assert.equal(deliveries.length, 1);
+    assert.equal(deliveries[0].user.email, "martha@example.com");
+    assert.match(deliveries[0].invitationUrl, /^http:\/\/127\.0\.0\.1:/u);
+
+    const directory = await fetch(`${baseUrl}/api/v1/admin/staff`, { headers: adminHeaders });
+    const [employee] = (await directory.json()).data;
+    assert.equal(employee.invitationDelivery.status, "sent");
+    assert.equal(employee.invitationDelivery.provider, "resend");
+
+    const replacement = await fetch(`${baseUrl}/api/v1/admin/staff/${employee.id}/invitations`, {
+      method: "POST",
+      headers: adminHeaders
+    });
+    const replacementPayload = await replacement.json();
+    assert.equal(replacement.status, 201, JSON.stringify(replacementPayload));
+    assert.equal(replacementPayload.data.delivery.status, "sent");
+    assert.equal(deliveries.length, 2);
+
+    const audit = await fetch(`${baseUrl}/api/v1/admin/audit`, { headers: adminHeaders });
+    const auditPayload = await audit.json();
+    assert.equal(auditPayload.data.filter((event) => event.action === "staff.invitation_sent").length, 2);
+  }, { email });
+});
+
+test("task evidence requires manager approval with protected files, photo, signature, contacts, and WhatsApp updates", async () => {
+  const whatsappCalls = [];
+  const whatsapp = {
+    configured: true,
+    status: () => ({ provider: "meta_whatsapp_cloud_api", configured: true, missingSettings: [] }),
+    async sendTaskUpdate(input) {
+      whatsappCalls.push(input);
+      return {
+        provider: "meta_whatsapp_cloud_api",
+        messageId: `wamid_${whatsappCalls.length}`,
+        recipientLast4: String(input.to).replace(/\D/gu, "").slice(-4),
+        sentAt: "2026-08-23T18:00:00.000Z"
+      };
+    }
+  };
+
+  await withServer(async (baseUrl) => {
+    const ownerInvite = await inviteEmployee(baseUrl, {
+      name: "Operations Owner",
+      email: "owner@example.com",
+      phone: "+1 317 555 0100",
+      whatsappNumber: "+13175550100",
+      jobTitle: "Owner Administrator",
+      role: "owner",
+      country: "Liberia / United States",
+      locations: ["liberia", "us"]
+    });
+    const owner = await acceptInvitation(baseUrl, ownerInvite.token);
+    const workerInvite = await inviteEmployee(baseUrl, {
+      name: "Martha Kromah",
+      email: "martha@example.com",
+      phone: "+231 77 123 4567",
+      whatsappNumber: "+231771234567",
+      jobTitle: "Quality Associate",
+      role: "liberia_staff",
+      country: "Liberia",
+      locations: ["liberia"],
+      managerId: owner.user.id
+    });
+    const worker = await acceptInvitation(baseUrl, workerInvite.token);
+
+    const ownerPhoto = await staffUpload(baseUrl, "/api/v1/staff/profile/files/profile_photo", owner, {
+      name: "owner.png", type: "image/png", contents: Buffer.from("owner-photo")
+    });
+    assert.equal(ownerPhoto.status, 201, await ownerPhoto.text());
+    const ownerSignature = await staffUpload(baseUrl, "/api/v1/staff/profile/files/signature", owner, {
+      name: "signature.png", type: "image/png", contents: Buffer.from("signed-by-owner")
+    });
+    assert.equal(ownerSignature.status, 201, await ownerSignature.text());
+
+    const created = await staffFetch(baseUrl, "/api/v1/staff/tasks", owner, {
+      method: "POST",
+      body: {
+        title: "Inspect export packing run",
+        type: "quality",
+        location: "liberia",
+        priority: "urgent",
+        assignedTo: worker.user.id,
+        scopeOfWork: "Inspect the packed chewing sticks, record defects, and document the sealed export cartons.",
+        evidenceRequirements: ["document", "photo", "video"]
+      }
+    });
+    const createdPayload = await created.json();
+    assert.equal(created.status, 201, JSON.stringify(createdPayload));
+    const task = createdPayload.data.task;
+    assert.equal(task.assignedTo, worker.user.id);
+    assert.equal(whatsappCalls.at(-1).to, "+231771234567");
+
+    const sow = await staffUpload(baseUrl, `/api/v1/staff/tasks/${task.id}/files`, owner, {
+      name: "packing-sow.pdf", type: "application/pdf", kind: "sow", phase: "scope", contents: Buffer.from("test-sow")
+    });
+    const sowPayload = await sow.json();
+    assert.equal(sow.status, 201, JSON.stringify(sowPayload));
+    const sowTask = sowPayload.data;
+    assert.equal(sowTask.attachments[0].phase, "scope");
+    assert.equal(Object.hasOwn(sowTask.attachments[0], "storedPath"), false);
+
+    const started = await staffFetch(baseUrl, `/api/v1/staff/tasks/${task.id}`, worker, {
+      method: "PATCH", body: { status: "in_progress" }
+    });
+    assert.equal(started.status, 200);
+    const earlySubmit = await staffFetch(baseUrl, `/api/v1/staff/tasks/${task.id}/submit`, worker, {
+      method: "POST", body: { submissionNote: "Inspection complete." }
+    });
+    assert.equal(earlySubmit.status, 409);
+    assert.equal((await earlySubmit.json()).error.code, "task_evidence_required");
+
+    const evidence = [
+      { name: "inspection.pdf", type: "application/pdf", kind: "document", contents: Buffer.from("inspection-report") },
+      { name: "cartons.jpg", type: "image/jpeg", kind: "photo", contents: Buffer.from("photo-proof") },
+      { name: "packing.mp4", type: "video/mp4", kind: "video", contents: Buffer.from("video-proof") }
+    ];
+    for (const file of evidence) {
+      const uploaded = await staffUpload(baseUrl, `/api/v1/staff/tasks/${task.id}/files`, worker, { ...file, phase: "completion" });
+      assert.equal(uploaded.status, 201, await uploaded.text());
+    }
+
+    const submitted = await staffFetch(baseUrl, `/api/v1/staff/tasks/${task.id}/submit`, worker, {
+      method: "POST", body: { submissionNote: "All cartons passed inspection. Report, photos, and video are attached." }
+    });
+    const submittedPayload = await submitted.json();
+    assert.equal(submitted.status, 200, JSON.stringify(submittedPayload));
+    assert.equal(submittedPayload.data.task.status, "pending_approval");
+    assert.equal(whatsappCalls.at(-1).to, "+13175550100");
+
+    const approved = await staffFetch(baseUrl, `/api/v1/staff/tasks/${task.id}/review`, owner, {
+      method: "POST", body: { decision: "approve", reviewNote: "Evidence reviewed and accepted." }
+    });
+    const approvedPayload = await approved.json();
+    assert.equal(approved.status, 200, JSON.stringify(approvedPayload));
+    assert.equal(approvedPayload.data.task.status, "completed");
+    assert.equal(approvedPayload.data.task.approval.approvedByName, "Operations Owner");
+    assert.match(approvedPayload.data.task.approval.approverPhotoUrl, /\/api\/v1\/staff\/files\//u);
+    assert.match(approvedPayload.data.task.approval.approverSignatureUrl, /\/api\/v1\/staff\/files\//u);
+
+    const workerWorkspace = await staffFetch(baseUrl, "/api/v1/staff/workspace", worker);
+    const workspacePayload = await workerWorkspace.json();
+    const completed = workspacePayload.data.tasks.find((item) => item.id === task.id);
+    assert.equal(completed.status, "completed");
+    assert.equal(workspacePayload.data.directory.some((person) => person.email === "owner@example.com"), true);
+    assert.equal(workspacePayload.data.directory.some((person) => person.whatsappNumber === "+231771234567"), true);
+
+    const signatureFile = await staffFetch(baseUrl, completed.approval.approverSignatureUrl, worker);
+    assert.equal(signatureFile.status, 200);
+    assert.equal(await signatureFile.text(), "signed-by-owner");
+    const publicFileAttempt = await fetch(`${baseUrl}${completed.approval.approverSignatureUrl}`);
+    assert.equal(publicFileAttempt.status, 401);
+    assert.equal(whatsappCalls.at(-1).to, "+231771234567");
+  }, { whatsapp });
+});
 
 test("staff invitations create secure individual sessions and enforce Liberia role boundaries", async () => {
   await withServer(async (baseUrl) => {

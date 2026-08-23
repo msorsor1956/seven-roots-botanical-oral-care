@@ -24,8 +24,8 @@
     element.classList.toggle('is-error', isError);
   };
   const statusClass = (value) => {
-    if (['blocked', 'sold_out', 'rejected', 'returned', 'inactive'].includes(value)) return ' is-danger';
-    if (['urgent', 'low_stock', 'submitted', 'approved_pending_zoho', 'in_transit', 'unfulfilled'].includes(value)) return ' is-warning';
+    if (['blocked', 'changes_requested', 'sold_out', 'rejected', 'returned', 'inactive'].includes(value)) return ' is-danger';
+    if (['urgent', 'pending_approval', 'low_stock', 'submitted', 'approved_pending_zoho', 'in_transit', 'unfulfilled'].includes(value)) return ' is-warning';
     return '';
   };
   const makeStatus = (value) => {
@@ -57,6 +57,31 @@
     return payload.data;
   };
 
+  const uploadFile = async (path, file, { kind, phase } = {}) => {
+    const response = await fetch(path, {
+      method: 'POST',
+      credentials: 'same-origin',
+      headers: {
+        accept: 'application/json',
+        'content-type': file.type || 'application/octet-stream',
+        'x-csrf-token': csrfToken,
+        'x-file-name': file.name,
+        ...(kind ? { 'x-file-kind': kind } : {}),
+        ...(phase ? { 'x-file-phase': phase } : {})
+      },
+      body: file
+    });
+    const payload = await response.json().catch(() => ({}));
+    if (!response.ok) throw new Error(payload.error?.message || 'The file could not be uploaded.');
+    return payload.data;
+  };
+
+  const workFileKind = (file) => file.type.startsWith('image/') ? 'photo' : file.type.startsWith('video/') ? 'video' : 'document';
+  const whatsappUrl = (number, message = '') => {
+    const digits = String(number || '').replace(/\D/g, '');
+    return digits ? `https://wa.me/${digits}${message ? `?text=${encodeURIComponent(message)}` : ''}` : '';
+  };
+
   const actionButton = (label, action, secondary = false) => {
     const button = document.createElement('button');
     button.type = 'button';
@@ -80,9 +105,18 @@
     const form = qs('[data-task-form]');
     form.hidden = !permission('tasks.manage');
     const locationSelect = qs('[data-task-location]');
+    const selectedLocation = locationSelect.value;
     locationSelect.replaceChildren();
     workspace.user.locations.forEach((location) => locationSelect.append(new Option(locationLabel(location), location)));
     if (workspace.user.role === 'owner') locationSelect.append(new Option('Both locations', 'both'));
+    if ([...locationSelect.options].some((option) => option.value === selectedLocation)) locationSelect.value = selectedLocation;
+
+    const assigneeSelect = qs('[data-task-assignee]');
+    const selectedAssignee = assigneeSelect.value;
+    assigneeSelect.replaceChildren(new Option('Open to claim', ''));
+    workspace.directory.forEach((person) => assigneeSelect.append(new Option(`${person.name} · ${person.roleLabel}`, person.id)));
+    assigneeSelect.value = selectedAssignee;
+    const personById = new Map(workspace.directory.map((person) => [person.id, person]));
 
     const list = qs('[data-task-list]');
     list.replaceChildren();
@@ -93,53 +127,253 @@
       list.append(empty);
       return;
     }
+
     workspace.tasks.forEach((task) => {
-      const row = document.createElement('article');
-      row.className = 'task-row';
-      const copy = document.createElement('div');
-      copy.className = 'task-copy';
+      const card = document.createElement('article');
+      card.className = `task-card${task.status === 'completed' ? ' is-completed' : ''}`;
+      const header = document.createElement('header');
+      const identity = document.createElement('div');
+      const eyebrow = document.createElement('small');
+      eyebrow.textContent = `${statusLabel(task.type)} · ${locationLabel(task.location)}`;
       const title = document.createElement('h3');
       title.textContent = task.title;
-      const description = document.createElement('p');
-      description.textContent = task.description || 'No additional instructions.';
-      copy.append(title, description);
+      identity.append(eyebrow, title);
+      const badges = document.createElement('div');
+      badges.className = 'task-badges';
+      if (task.priority === 'urgent' && task.status !== 'completed') badges.append(makeStatus('urgent'));
+      badges.append(makeStatus(task.status));
+      header.append(identity, badges);
 
-      const meta = document.createElement('div');
-      meta.className = 'task-meta';
-      const type = document.createElement('strong');
-      type.textContent = statusLabel(task.type);
-      const location = document.createElement('span');
-      location.textContent = locationLabel(task.location);
-      const owner = document.createElement('span');
-      owner.textContent = task.assignedTo ? (task.assignedTo === workspace.user.id ? 'Assigned to you' : 'Assigned') : 'Open to claim';
-      meta.append(type, location, owner);
-      const badge = makeStatus(task.priority === 'urgent' && task.status !== 'completed' ? 'urgent' : task.status);
+      const scope = document.createElement('section');
+      scope.className = 'task-scope';
+      const scopeLabel = document.createElement('strong');
+      scopeLabel.textContent = 'Scope of Work';
+      const scopeText = document.createElement('p');
+      scopeText.textContent = task.scopeOfWork || task.description || 'No Scope of Work was recorded.';
+      scope.append(scopeLabel, scopeText);
+
+      const details = document.createElement('dl');
+      details.className = 'task-details';
+      const assignee = personById.get(task.assignedTo);
+      const latestNotification = task.notifications?.[0];
+      const detailEntries = [
+        ['Assigned to', assignee?.name || (task.assignedTo === workspace.user.id ? workspace.user.name : 'Open to claim')],
+        ['Due', task.dueAt ? formatDate(task.dueAt) : 'No due date'],
+        ['Created by', task.createdByName],
+        ['Updated', formatDate(task.updatedAt)],
+        ['WhatsApp', latestNotification ? statusLabel(latestNotification.status) : 'No notification']
+      ];
+      detailEntries.forEach(([term, value]) => {
+        const group = document.createElement('div');
+        const dt = document.createElement('dt');
+        dt.textContent = term;
+        const dd = document.createElement('dd');
+        dd.textContent = value || 'Not available';
+        group.append(dt, dd);
+        details.append(group);
+      });
+
+      const files = document.createElement('section');
+      files.className = 'task-files-panel';
+      const fileTitle = document.createElement('strong');
+      fileTitle.textContent = `Work files · ${task.attachments.length}`;
+      const fileList = document.createElement('div');
+      fileList.className = 'task-file-list';
+      if (!task.attachments.length) {
+        const empty = document.createElement('span');
+        empty.textContent = 'No SOW, reference, or completion files uploaded yet.';
+        fileList.append(empty);
+      }
+      task.attachments.forEach((file) => {
+        const link = document.createElement('a');
+        link.href = file.downloadUrl;
+        link.target = '_blank';
+        link.rel = 'noopener';
+        link.textContent = `${file.phase === 'scope' ? 'SOW' : 'Proof'} · ${file.originalName}`;
+        fileList.append(link);
+      });
+      files.append(fileTitle, fileList);
+
+      const evidence = document.createElement('div');
+      evidence.className = 'evidence-checklist';
+      (task.evidenceRequirements || []).forEach((requirement) => {
+        const complete = task.attachments.some((file) => file.phase === 'completion' && file.family === requirement);
+        const item = document.createElement('span');
+        item.className = complete ? 'is-ready' : '';
+        item.textContent = `${complete ? '✓' : '○'} ${statusLabel(requirement)}`;
+        evidence.append(item);
+      });
+
       const actions = document.createElement('div');
-      actions.className = 'task-actions';
-      const canUpdate = permission('tasks.update') && (permission('tasks.manage') || !task.assignedTo || task.assignedTo === workspace.user.id);
-      if (canUpdate && task.status === 'open') {
-        actions.append(actionButton(task.assignedTo ? 'Start' : 'Claim task', () => runWorkspaceAction(
+      actions.className = 'task-actions task-primary-actions';
+      const isAssignee = task.assignedTo === workspace.user.id;
+      const canWork = permission('tasks.update') && (!task.assignedTo || isAssignee);
+      if (canWork && task.status === 'open') {
+        actions.append(actionButton(task.assignedTo ? 'Start task' : 'Claim task', () => runWorkspaceAction(
           `/api/v1/staff/tasks/${encodeURIComponent(task.id)}`,
           { method: 'PATCH', body: { assignedTo: workspace.user.id, status: 'in_progress' } },
           `${task.title} is now in progress.`
         )));
       }
-      if (canUpdate && ['open', 'in_progress', 'blocked'].includes(task.status)) {
-        actions.append(actionButton('Complete', () => runWorkspaceAction(
+      if (canWork && task.status === 'blocked') {
+        actions.append(actionButton('Resume task', () => runWorkspaceAction(
           `/api/v1/staff/tasks/${encodeURIComponent(task.id)}`,
-          { method: 'PATCH', body: { status: 'completed' } },
-          `${task.title} was completed.`
+          { method: 'PATCH', body: { status: 'in_progress' } }, `${task.title} was resumed.`
         )));
       }
-      if (canUpdate && task.status === 'in_progress') {
-        actions.append(actionButton('Block', () => runWorkspaceAction(
+      if (canWork && task.status === 'in_progress') {
+        actions.append(actionButton('Mark blocked', () => runWorkspaceAction(
           `/api/v1/staff/tasks/${encodeURIComponent(task.id)}`,
-          { method: 'PATCH', body: { status: 'blocked' } },
-          `${task.title} was marked blocked.`
+          { method: 'PATCH', body: { status: 'blocked' } }, `${task.title} was marked blocked.`
         ), true));
       }
-      row.append(copy, meta, badge, actions);
-      list.append(row);
+      const contactUrl = whatsappUrl(assignee?.whatsappNumber, `Hello ${assignee?.name || ''}, I am contacting you about the SEVEN ROOTS task: ${task.title}.`);
+      if (contactUrl && permission('tasks.manage')) {
+        const contact = document.createElement('a');
+        contact.className = 'task-whatsapp';
+        contact.href = contactUrl;
+        contact.target = '_blank';
+        contact.rel = 'noopener';
+        contact.textContent = 'WhatsApp employee';
+        actions.append(contact);
+      }
+
+      card.append(header, scope, details, files, evidence, actions);
+
+      if (isAssignee && ['in_progress', 'changes_requested'].includes(task.status)) {
+        const submission = document.createElement('form');
+        submission.className = 'task-submission';
+        const heading = document.createElement('div');
+        const submitTitle = document.createElement('strong');
+        submitTitle.textContent = task.status === 'changes_requested' ? 'Manager requested changes' : 'Completion evidence';
+        const reviewText = document.createElement('p');
+        reviewText.textContent = task.reviewNote || 'Upload every required file, then submit the task for manager approval.';
+        heading.append(submitTitle, reviewText);
+        const uploadLabel = document.createElement('label');
+        const uploadText = document.createElement('span');
+        uploadText.textContent = 'Documents, photos, or video';
+        const input = document.createElement('input');
+        input.type = 'file';
+        input.multiple = true;
+        input.accept = '.pdf,.doc,.docx,.xls,.xlsx,.txt,.csv,image/*,video/mp4,video/webm,video/quicktime';
+        uploadLabel.append(uploadText, input);
+        const uploadButton = document.createElement('button');
+        uploadButton.type = 'button';
+        uploadButton.textContent = 'Upload selected proof';
+        uploadButton.addEventListener('click', async () => {
+          const selected = [...input.files];
+          if (!selected.length) return setStatus(workspaceStatus, 'Choose at least one work file.', true);
+          uploadButton.disabled = true;
+          try {
+            for (const file of selected) {
+              setStatus(workspaceStatus, `Uploading ${file.name}…`);
+              await uploadFile(`/api/v1/staff/tasks/${encodeURIComponent(task.id)}/files`, file, { kind: workFileKind(file), phase: 'completion' });
+            }
+            await loadWorkspace();
+            setStatus(workspaceStatus, `${selected.length} completion file${selected.length === 1 ? '' : 's'} uploaded.`);
+          } catch (error) { setStatus(workspaceStatus, error.message, true); } finally { uploadButton.disabled = false; }
+        });
+        const noteLabel = document.createElement('label');
+        const noteText = document.createElement('span');
+        noteText.textContent = 'Completion note for manager';
+        const note = document.createElement('textarea');
+        note.maxLength = 1200;
+        note.required = true;
+        note.placeholder = 'Summarize completed work and identify the uploaded proof.';
+        noteLabel.append(noteText, note);
+        const submitButton = document.createElement('button');
+        submitButton.type = 'submit';
+        submitButton.textContent = 'Submit for approval';
+        submission.addEventListener('submit', async (event) => {
+          event.preventDefault();
+          submitButton.disabled = true;
+          try {
+            await runWorkspaceAction(`/api/v1/staff/tasks/${encodeURIComponent(task.id)}/submit`, {
+              method: 'POST', body: { submissionNote: note.value }
+            }, `${task.title} is pending manager approval.`);
+          } catch (error) { setStatus(workspaceStatus, error.message, true); } finally { submitButton.disabled = false; }
+        });
+        submission.append(heading, uploadLabel, uploadButton, noteLabel, submitButton);
+        card.append(submission);
+      }
+
+      if (task.status === 'pending_approval') {
+        const pending = document.createElement('section');
+        pending.className = 'task-pending';
+        const pendingTitle = document.createElement('strong');
+        pendingTitle.textContent = 'Pending manager approval';
+        const pendingCopy = document.createElement('p');
+        pendingCopy.textContent = `${task.submittedByName} submitted this work ${formatDate(task.submittedAt)}. ${task.submissionNote}`;
+        pending.append(pendingTitle, pendingCopy);
+        if (permission('tasks.approve') && task.submittedBy !== workspace.user.id) {
+          const review = document.createElement('form');
+          review.className = 'task-review';
+          const note = document.createElement('textarea');
+          note.maxLength = 1200;
+          note.placeholder = 'Approval note or required corrections';
+          note.setAttribute('aria-label', `Review note for ${task.title}`);
+          const approve = document.createElement('button');
+          approve.type = 'button';
+          approve.textContent = 'Approve and sign';
+          approve.disabled = !workspace.user.profileReady;
+          approve.title = workspace.user.profileReady ? '' : 'Upload your profile photo and signature first.';
+          approve.addEventListener('click', async () => {
+            approve.disabled = true;
+            try {
+              await runWorkspaceAction(`/api/v1/staff/tasks/${encodeURIComponent(task.id)}/review`, {
+                method: 'POST', body: { decision: 'approve', reviewNote: note.value }
+              }, `${task.title} was approved and completed.`);
+            } catch (error) { setStatus(workspaceStatus, error.message, true); } finally { approve.disabled = !workspace.user.profileReady; }
+          });
+          const changes = document.createElement('button');
+          changes.type = 'button';
+          changes.className = 'secondary';
+          changes.textContent = 'Request changes';
+          changes.addEventListener('click', async () => {
+            changes.disabled = true;
+            try {
+              await runWorkspaceAction(`/api/v1/staff/tasks/${encodeURIComponent(task.id)}/review`, {
+                method: 'POST', body: { decision: 'request_changes', reviewNote: note.value }
+              }, `${task.title} was returned for changes.`);
+            } catch (error) { setStatus(workspaceStatus, error.message, true); } finally { changes.disabled = false; }
+          });
+          review.append(note, approve, changes);
+          pending.append(review);
+        }
+        card.append(pending);
+      }
+
+      if (task.status === 'completed' && task.approval) {
+        const seal = document.createElement('section');
+        seal.className = 'approval-seal';
+        const check = document.createElement('span');
+        check.className = 'approval-check';
+        check.textContent = '✓';
+        const approvedCopy = document.createElement('div');
+        const approvedTitle = document.createElement('strong');
+        approvedTitle.textContent = 'Approved and completed';
+        const approvedBy = document.createElement('p');
+        approvedBy.textContent = `${task.approval.approvedByName} · ${formatDate(task.approval.approvedAt)}`;
+        approvedCopy.append(approvedTitle, approvedBy);
+        if (task.approval.approverPhotoUrl) {
+          const photo = document.createElement('img');
+          photo.className = 'approver-photo';
+          photo.src = task.approval.approverPhotoUrl;
+          photo.alt = `${task.approval.approvedByName}, approving manager`;
+          seal.append(photo);
+        }
+        seal.append(check, approvedCopy);
+        if (task.approval.approverSignatureUrl) {
+          const signature = document.createElement('img');
+          signature.className = 'approval-signature';
+          signature.src = task.approval.approverSignatureUrl;
+          signature.alt = `${task.approval.approvedByName}'s approval signature`;
+          seal.append(signature);
+        }
+        card.append(seal);
+      }
+
+      list.append(card);
     });
   };
 
@@ -507,6 +741,91 @@
     });
   };
 
+  const renderContacts = () => {
+    const status = qs('[data-whatsapp-status]');
+    status.textContent = workspace.whatsapp?.configured ? 'WhatsApp notifications active' : 'WhatsApp click-to-chat ready';
+    status.className = `source-badge${workspace.whatsapp?.configured ? '' : ' is-warning'}`;
+    const list = qs('[data-contact-list]');
+    list.replaceChildren();
+    const managerById = new Map(workspace.directory.map((person) => [person.id, person.name]));
+    const contacts = [
+      ...(workspace.adminContact?.email || workspace.adminContact?.phone || workspace.adminContact?.whatsappNumber ? [{ ...workspace.adminContact, isAdmin: true }] : []),
+      ...workspace.directory
+    ];
+    if (!contacts.length) {
+      const empty = document.createElement('p');
+      empty.className = 'empty';
+      empty.textContent = 'No employee contacts are available yet.';
+      list.append(empty);
+      return;
+    }
+    contacts.forEach((person) => {
+      const card = document.createElement('article');
+      card.className = 'contact-card';
+      const portrait = document.createElement('div');
+      portrait.className = 'contact-portrait';
+      if (person.profilePhotoUrl) {
+        const img = document.createElement('img');
+        img.src = person.profilePhotoUrl;
+        img.alt = `${person.name} profile`;
+        portrait.append(img);
+      } else {
+        portrait.textContent = person.name.split(/\s+/).slice(0, 2).map((part) => part[0]).join('').toUpperCase();
+      }
+      const copy = document.createElement('div');
+      const role = document.createElement('small');
+      role.textContent = person.isAdmin ? 'Administration' : person.roleLabel;
+      const name = document.createElement('h3');
+      name.textContent = person.name;
+      const title = document.createElement('p');
+      title.textContent = [person.jobTitle, person.managerId ? `Manager: ${managerById.get(person.managerId) || 'Assigned manager'}` : ''].filter(Boolean).join(' · ') || 'SEVEN ROOTS team';
+      copy.append(role, name, title);
+      const links = document.createElement('div');
+      links.className = 'contact-actions';
+      if (person.email) {
+        const email = document.createElement('a');
+        email.href = `mailto:${person.email}`;
+        email.textContent = person.email;
+        links.append(email);
+      }
+      if (person.phone) {
+        const phone = document.createElement('a');
+        phone.href = `tel:${person.phone}`;
+        phone.textContent = person.phone;
+        links.append(phone);
+      }
+      const waUrl = whatsappUrl(person.whatsappNumber, `Hello ${person.name}, this is a SEVEN ROOTS operations message.`);
+      if (waUrl) {
+        const whatsapp = document.createElement('a');
+        whatsapp.className = 'whatsapp-action';
+        whatsapp.href = waUrl;
+        whatsapp.target = '_blank';
+        whatsapp.rel = 'noopener';
+        whatsapp.textContent = 'Open WhatsApp';
+        links.append(whatsapp);
+      }
+      card.append(portrait, copy, links);
+      list.append(card);
+    });
+  };
+
+  const renderProfile = () => {
+    const form = qs('[data-profile-form]');
+    form.elements.jobTitle.value = workspace.user.jobTitle || '';
+    form.elements.phone.value = workspace.user.phone || '';
+    form.elements.whatsappNumber.value = workspace.user.whatsappNumber || '';
+    const photo = qs('[data-profile-photo]');
+    const photoEmpty = qs('[data-profile-photo-empty]');
+    photo.hidden = !workspace.user.profilePhotoUrl;
+    photoEmpty.hidden = Boolean(workspace.user.profilePhotoUrl);
+    if (workspace.user.profilePhotoUrl) photo.src = workspace.user.profilePhotoUrl;
+    const signature = qs('[data-profile-signature]');
+    const signatureEmpty = qs('[data-profile-signature-empty]');
+    signature.hidden = !workspace.user.signatureUrl;
+    signatureEmpty.hidden = Boolean(workspace.user.signatureUrl);
+    if (workspace.user.signatureUrl) signature.src = workspace.user.signatureUrl;
+  };
+
   const renderNavigation = () => {
     const access = {
       work: permission('tasks.view'),
@@ -514,6 +833,8 @@
       transfers: permission('transfers.view'),
       orders: permission('orders.view'),
       finance: permission('finance.view'),
+      contacts: permission('directory.view'),
+      profile: permission('profile.update'),
       audit: permission('audit.view')
     };
     qsa('[data-view]').forEach((button) => { button.hidden = !access[button.dataset.view]; });
@@ -537,6 +858,8 @@
     renderTransfers();
     renderOrders();
     renderFinance();
+    renderContacts();
+    renderProfile();
     renderAudit();
     renderNavigation();
   };
@@ -563,11 +886,57 @@
     const button = qs('button[type="submit"]', event.currentTarget);
     button.disabled = true;
     try {
-      await runWorkspaceAction('/api/v1/staff/tasks', {
+      setStatus(workspaceStatus, 'Creating the operation and securing its work files…');
+      const created = await api('/api/v1/staff/tasks', {
         method: 'POST',
-        body: { title: form.get('title'), type: form.get('type'), location: form.get('location'), priority: form.get('priority'), description: form.get('description') }
-      }, 'Task created.');
+        body: {
+          title: form.get('title'),
+          type: form.get('type'),
+          location: form.get('location'),
+          priority: form.get('priority'),
+          assignedTo: form.get('assignedTo'),
+          dueAt: form.get('dueAt') || null,
+          scopeOfWork: form.get('scopeOfWork'),
+          evidenceRequirements: form.getAll('evidenceRequirements').map(String)
+        }
+      });
+      const task = created.task || created;
+      const sowFiles = form.getAll('sowFiles').filter((file) => file instanceof File && file.size);
+      const workFiles = form.getAll('workFiles').filter((file) => file instanceof File && file.size);
+      for (const file of sowFiles) {
+        setStatus(workspaceStatus, `Uploading SOW file ${file.name}…`);
+        await uploadFile(`/api/v1/staff/tasks/${encodeURIComponent(task.id)}/files`, file, { kind: 'sow', phase: 'scope' });
+      }
+      for (const file of workFiles) {
+        setStatus(workspaceStatus, `Uploading reference file ${file.name}…`);
+        await uploadFile(`/api/v1/staff/tasks/${encodeURIComponent(task.id)}/files`, file, { kind: workFileKind(file), phase: 'scope' });
+      }
       event.currentTarget.reset();
+      await loadWorkspace();
+      setStatus(workspaceStatus, `${task.title} was created${task.assignedTo ? ' and assigned' : ''}.`);
+    } catch (error) { setStatus(workspaceStatus, error.message, true); } finally { button.disabled = false; }
+  });
+
+  qs('[data-profile-form]').addEventListener('submit', async (event) => {
+    event.preventDefault();
+    const formElement = event.currentTarget;
+    const form = new FormData(formElement);
+    const button = qs('button[type="submit"]', formElement);
+    button.disabled = true;
+    try {
+      setStatus(workspaceStatus, 'Saving your contact and approval profile…');
+      await api('/api/v1/staff/profile', {
+        method: 'PATCH',
+        body: { jobTitle: form.get('jobTitle'), phone: form.get('phone'), whatsappNumber: form.get('whatsappNumber') }
+      });
+      const photo = form.get('profilePhoto');
+      if (photo instanceof File && photo.size) await uploadFile('/api/v1/staff/profile/files/profile_photo', photo);
+      const signature = form.get('signature');
+      if (signature instanceof File && signature.size) await uploadFile('/api/v1/staff/profile/files/signature', signature);
+      formElement.elements.profilePhoto.value = '';
+      formElement.elements.signature.value = '';
+      await loadWorkspace();
+      setStatus(workspaceStatus, 'Your contact and approval profile is up to date.');
     } catch (error) { setStatus(workspaceStatus, error.message, true); } finally { button.disabled = false; }
   });
 
