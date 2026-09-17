@@ -1,7 +1,16 @@
 import pg from "pg";
 
 const required = ["POSTGRES_ADMIN_URL", "NEW_POSTGRES_PASSWORD", "NEW_CORE_PASSWORD", "NEW_TRAINING_DOCS_PASSWORD", "NEW_EMPLOYEE_DOCS_PASSWORD"];
-for (const name of required) if (!process.env[name]) throw new Error(`${name} is required for secure bootstrap.`);
+const configured = required.filter((name) => Boolean(process.env[name]));
+
+// This is a one-time recovery/bootstrap utility. Production deploys must remain
+// safe after its temporary credentials are cleared.
+if (configured.length === 0) {
+  console.log("Secure database bootstrap skipped; one-time credentials are not configured.");
+  process.exit(0);
+}
+
+for (const name of required) if (!process.env[name]) throw new Error(`${name} is required when secure bootstrap is enabled.`);
 
 const roles = [
   ["sr_core", process.env.NEW_CORE_PASSWORD],
