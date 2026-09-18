@@ -57,6 +57,8 @@
   const checkoutWasCancelled = new URL(window.location.href).searchParams.get('checkout') === 'cancelled';
   const checkoutStatus = qs('[data-checkout-status]');
   const checkoutSubmit = qs('[data-checkout-submit]');
+  const paypalSubmit = qs('[data-paypal-submit]');
+  let paypalReady = false;
   const storageKey = 'seven-roots-selected-format';
   let selectedPack = 'Daily Ritual';
   function syncSelectedAvailability() {
@@ -200,7 +202,9 @@
         if (format.pricing) pricedFormats += 1;
       });
       checkoutReady = payload.meta?.pricingStatus === 'available' && pricedFormats === packNames.length;
-      checkoutSubmit.disabled = !checkoutReady;
+    checkoutSubmit.disabled = !checkoutReady;
+      paypalReady = payload.meta?.paypalStatus === 'available';
+      if (paypalSubmit) paypalSubmit.disabled = !paypalReady;
       setStatus(
         checkoutStatus,
         checkoutReady
@@ -268,7 +272,8 @@
     const formData = new FormData(checkoutForm);
     const value = formData.get('pack') || selectedPack;
     updatePack(String(value));
-    if (!checkoutReady) {
+    const provider = event.submitter?.value === 'paypal' ? 'paypal' : 'stripe';
+    if ((provider === 'stripe' && !checkoutReady) || (provider === 'paypal' && !paypalReady)) {
       setStatus(checkoutStatus, 'Secure checkout is not available yet. Please try again shortly.', 'error');
       return;
     }
@@ -277,10 +282,12 @@
       return;
     }
     checkoutSubmit.disabled = true;
-    checkoutSubmit.textContent = 'Preparing secure checkout…';
-    setStatus(checkoutStatus, 'Creating a protected Stripe Checkout Session…');
+    if (paypalSubmit) paypalSubmit.disabled = true;
+    const activeButton = provider === 'paypal' ? paypalSubmit : checkoutSubmit;
+    activeButton.textContent = 'Preparing secure checkout…';
+    setStatus(checkoutStatus, provider === 'paypal' ? 'Creating a protected PayPal order…' : 'Creating a protected Stripe Checkout Session…');
     try {
-      const payload = await postJson('/api/v1/checkout/sessions', {
+      const payload = await postJson(provider === 'paypal' ? '/api/v1/paypal/orders' : '/api/v1/checkout/sessions', {
         formatSlug: packSlugs[String(value)],
         quantity: Number(formData.get('quantity'))
       });
@@ -288,7 +295,8 @@
     } catch (error) {
       setStatus(checkoutStatus, `${error.message} No payment was made.`, 'error');
       checkoutSubmit.disabled = false;
-      checkoutSubmit.textContent = 'Continue to secure checkout';
+      checkoutSubmit.textContent = 'Pay by card with Stripe';
+      if (paypalSubmit) { paypalSubmit.disabled = !paypalReady; paypalSubmit.textContent = 'Pay with PayPal'; }
     }
   });
   dialog?.addEventListener('click', (event) => {

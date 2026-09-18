@@ -2,6 +2,7 @@
   const qs = (selector) => document.querySelector(selector);
   const apiBase = qs('meta[name="seven-roots-api-base"]')?.content.replace(/\/$/u, '') || '';
   const sessionId = new URL(window.location.href).searchParams.get('session_id') || '';
+  const paypalOrderId = new URL(window.location.href).searchParams.get('token') || '';
   const title = qs('[data-title]');
   const message = qs('[data-message]');
   const mark = qs('[data-status-mark]');
@@ -16,7 +17,7 @@
     title.textContent = paid ? 'Your ritual is confirmed.' : 'Your order is being confirmed.';
     message.textContent = paid
       ? 'Payment is complete. Keep this order reference for your records; fulfillment updates will follow by email.'
-      : 'The order was received, but its payment is still processing. We will update the status when Stripe confirms it.';
+      : 'The order was received, but its payment is still processing. We will update the status when the payment provider confirms it.';
     mark.classList.add(paid ? 'is-success' : 'is-warning');
     qs('[data-order-number]').textContent = order.orderNumber;
     qs('[data-format]').textContent = `${order.formatName || 'SEVEN ROOTS format'}${order.sku ? ` · ${order.sku}` : ''}`;
@@ -35,6 +36,15 @@
   };
 
   const lookup = async () => {
+    if (paypalOrderId) {
+      if (!/^[A-Z0-9]{8,32}$/iu.test(paypalOrderId)) return showError('The PayPal order reference is invalid.');
+      const captured = await fetch(`${apiBase}/api/v1/paypal/orders/${encodeURIComponent(paypalOrderId)}/capture`, { method: 'POST', headers: { accept: 'application/json' } });
+      const capturePayload = await captured.json().catch(() => ({}));
+      if (!captured.ok) return showError(capturePayload.error?.message || 'PayPal could not confirm the payment. No additional payment was attempted.');
+      showOrder(capturePayload.data.order);
+      window.history.replaceState({}, '', `/order-success?paypal_order_id=${encodeURIComponent(paypalOrderId)}`);
+      return;
+    }
     if (!/^cs_[A-Za-z0-9_]+$/u.test(sessionId)) {
       showError('The Checkout Session reference is missing or invalid. Return to the collection or contact SEVEN ROOTS for help.');
       return;
@@ -47,7 +57,7 @@
         return;
       }
       if (response.status !== 404) {
-        showError(payload.error?.message || 'The order service is temporarily unavailable. Your Stripe receipt remains authoritative.');
+        showError(payload.error?.message || 'The order service is temporarily unavailable. Your payment receipt remains authoritative.');
         return;
       }
       await new Promise((resolve) => window.setTimeout(resolve, 1300 + attempt * 350));

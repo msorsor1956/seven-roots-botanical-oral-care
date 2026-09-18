@@ -7,6 +7,7 @@ import { fileURLToPath } from "node:url";
 import { formats, formatBySlug } from "./catalog.js";
 import { createInvitationEmailService } from "./email.js";
 import { createPayments, PaymentConfigurationError } from "./payments.js";
+import { createPayPalPayments, PayPalConfigurationError } from "./paypal.js";
 import { InventoryError, JsonStore } from "./store.js";
 import { validateInquiry, validateWaitlist } from "./validation.js";
 import { createZohoInventory, ZohoApiError, ZohoConfigurationError } from "./zoho.js";
@@ -222,6 +223,7 @@ export async function createApplication(options = {}) {
   } catch {}
   const store = options.store || await new JsonStore(dataDir).init();
   const payments = options.payments || createPayments(options.paymentOptions);
+  const paypal = options.paypal || createPayPalPayments(options.paypalOptions);
   const zohoOAuth = options.zohoOAuth || await createZohoOAuthManager({
     dataDir,
     publicBaseUrl,
@@ -460,6 +462,7 @@ export async function createApplication(options = {}) {
           version: "1.12.0",
           storage: "file",
           payments: payments.configured ? "ready" : "configuration_required",
+          paypal: paypal.configured ? "ready" : "configuration_required",
           inventoryIntegration: zoho.active ? "zoho_enabled" : "local",
           emailDelivery: email.configured ? "ready" : "configuration_required",
           workFiles: "ready",
@@ -497,7 +500,7 @@ export async function createApplication(options = {}) {
         }));
         sendJson(response, 200, {
           data: availableFormats,
-          meta: { count: availableFormats.length, pricingStatus: payments.configured ? "available" : "configuration_required" }
+          meta: { count: availableFormats.length, pricingStatus: payments.configured ? "available" : "configuration_required", paypalStatus: paypal.configured ? "available" : "configuration_required" }
         });
         return;
       }
@@ -538,9 +541,55 @@ export async function createApplication(options = {}) {
         return;
       }
 
+      if (request.method === "POST" && pathname === "/api/v1/paypal/orders") {
+        const rate = checkoutLimiter(request);
+        if (!rate.allowed) throw new HttpError(429, "rate_limited", "Too many checkout attempts. Please try again later.", { retryAfter: rate.retryAfter });
+        const input = await readJson(request);
+        const formatSlug = String(input.formatSlug || "").trim();
+        const quantity = Number(input.quantity ?? 1);
+        if (!formatBySlug.has(formatSlug) || !Number.isInteger(quantity) || quantity < 1 || quantity > 10) {
+          throw new HttpError(422, "validation_failed", "Choose a valid product and quantity.");
+        }
+        const format = formatBySlug.get(formatSlug);
+        await store.reserveInventory(format, quantity, requestId);
+        try {
+          const price = await payments.retrievePrice(format.slug);
+          const order = await paypal.createOrder({ format, quantity, unitAmount: price.unit_amount, currency: price.currency, requestId });
+          await store.attachPayPalReservation(requestId, order.id);
+          sendJson(response, 201, { data: order, message: "PayPal checkout is ready." });
+        } catch (error) {
+          await store.releaseInventoryReservation(requestId, "checkout_failed");
+          if (error instanceof PayPalConfigurationError || error?.code === "paypal_not_configured") {
+            throw new HttpError(503, "paypal_not_configured", error.message);
+          }
+          throw error;
+        }
+        return;
+      }
+
+      if (request.method === "POST" && pathname.startsWith("/api/v1/paypal/orders/") && pathname.endsWith("/capture")) {
+        const rate = checkoutLimiter(request);
+        if (!rate.allowed) throw new HttpError(429, "rate_limited", "Too many payment attempts. Please try again later.", { retryAfter: rate.retryAfter });
+        const orderId = pathname.slice("/api/v1/paypal/orders/".length, -"/capture".length);
+        try {
+          const capture = await paypal.captureOrder(orderId, requestId);
+          const result = await store.applyPayPalCapture(capture);
+          sendJson(response, 200, { data: { orderId, order: result.order }, message: "PayPal payment confirmed." });
+          if (!result.duplicate && result.order?.status === "paid") {
+            void processZohoOutbox(5).catch((error) => console.error("Zoho order sync:", error?.message || "failed"));
+          }
+        } catch (error) {
+          if (error instanceof PayPalConfigurationError || error?.code === "paypal_not_configured") {
+            throw new HttpError(503, "paypal_not_configured", error.message);
+          }
+          throw error;
+        }
+        return;
+      }
+
       if (request.method === "GET" && pathname === "/api/v1/orders/lookup") {
-        const sessionId = String(url.searchParams.get("session_id") || "");
-        if (!/^cs_[A-Za-z0-9_]+$/u.test(sessionId)) throw new HttpError(422, "invalid_session", "A valid Checkout Session is required.");
+        const sessionId = String(url.searchParams.get("session_id") || url.searchParams.get("paypal_order_id") || "");
+        if (!/^(cs_[A-Za-z0-9_]+|[A-Z0-9]{8,32})$/iu.test(sessionId)) throw new HttpError(422, "invalid_session", "A valid payment reference is required.");
         const order = store.publicOrder(sessionId);
         if (!order) throw new HttpError(404, "order_pending", "Your payment is still being confirmed. Please try again shortly.");
         sendJson(response, 200, { data: order });
@@ -1229,5 +1278,5 @@ export async function createApplication(options = {}) {
     }
   });
 
-  return { server, store, payments, zoho, zohoOAuth, email, whatsapp, workFiles, processZohoOutbox };
+  return { server, store, payments, paypal, zoho, zohoOAuth, email, whatsapp, workFiles, processZohoOutbox };
 }

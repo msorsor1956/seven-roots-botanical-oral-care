@@ -407,7 +407,7 @@
       <div class="dialog-step" data-dialog-content>
         <p class="eyebrow"><span></span> Secure checkout</p>
         <h2 id="dialog-title">Choose your SEVEN ROOTS ritual.</h2>
-        <p>Select a format and quantity, then continue to Stripe to enter your contact, delivery, and payment details securely.</p>
+        <p>Select a format and quantity, then pay securely by card with Stripe or with PayPal.</p>
         <div class="dialog-options">
           <label><input type="radio" name="pack" value="Travel Sleeve"><span><b>Travel Sleeve</b><small>1 stick · SR-T01 · <i data-dialog-price="travel-sleeve">Loading…</i></small></span></label>
           <label><input type="radio" name="pack" value="Daily Ritual" checked><span><b>Daily Ritual</b><small>5 sticks · SR-R05 · <i data-dialog-price="daily-ritual">Loading…</i></small></span></label>
@@ -415,11 +415,12 @@
         </div>
         <div class="checkout-fields">
           <label><span>Quantity</span><select name="quantity" aria-describedby="quantity-note"><option value="1">1 pack</option><option value="2">2 packs</option><option value="3">3 packs</option><option value="4">4 packs</option><option value="5">5 packs</option><option value="6">6 packs</option><option value="7">7 packs</option><option value="8">8 packs</option><option value="9">9 packs</option><option value="10">10 packs</option></select></label>
-          <p id="quantity-note">Delivery details and any configured shipping charge are shown in Stripe Checkout before payment.</p>
+          <p id="quantity-note">Delivery details and any configured shipping charge are shown before payment.</p>
         </div>
         <p class="checkout-trust"><span aria-hidden="true">✓</span> Amounts are set on the server. Card details never pass through the SEVEN ROOTS website.</p>
         <p class="form-status" data-checkout-status role="status" aria-live="polite">Checking secure checkout availability…</p>
-        <button class="button button-dark dialog-submit" type="submit" data-checkout-submit disabled>Continue to secure checkout</button>
+        <button class="button button-dark dialog-submit" type="submit" name="provider" value="stripe" data-checkout-submit disabled>Pay by card with Stripe</button>
+        <button class="button dialog-submit" type="submit" name="provider" value="paypal" data-paypal-submit disabled>Pay with PayPal</button>
       </div>
     </form>
   </dialog>

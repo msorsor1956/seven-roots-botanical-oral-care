@@ -75,6 +75,10 @@ const emptyData = () => ({
 });
 
 const stringId = (value) => typeof value === "string" ? value : value?.id || "";
+const paypalCents = (value) => {
+  const amount = Number(value);
+  return Number.isFinite(amount) && amount >= 0 ? Math.round(amount * 100) : null;
+};
 const safeQuantity = (value) => Math.max(1, Math.min(Number.parseInt(value, 10) || 1, 10));
 const stripeDate = (value) => Number.isFinite(value) ? new Date(value * 1000).toISOString() : new Date().toISOString();
 const isCents = (value) => Number.isInteger(value) && value >= 0;
@@ -586,6 +590,7 @@ export class JsonStore {
       id: randomUUID(),
       token: safeToken,
       stripeSessionId: "",
+      paypalOrderId: "",
       formatSlug: format.slug,
       quantity,
       trackedAtCheckout: tracked,
@@ -606,6 +611,14 @@ export class JsonStore {
     return reservation;
   }
 
+  async attachPayPalReservation(token, paypalOrderId) {
+    const reservation = this.data.inventoryReservations.find((item) => item.token === String(token || "").slice(0, 160) && item.status === "active");
+    if (!reservation) return null;
+    reservation.paypalOrderId = paypalOrderId;
+    await this.persist();
+    return reservation;
+  }
+
   async releaseInventoryReservation(token, reason = "checkout_failed") {
     const reservation = this.data.inventoryReservations.find((item) => item.token === String(token || "").slice(0, 160) && item.status === "active");
     if (!reservation) return null;
@@ -618,7 +631,10 @@ export class JsonStore {
   #completeInventoryForOrder(order, now) {
     if (order.inventoryAppliedAt || !paidStatuses.has(order.status)) return;
     const inventory = this.#inventoryRecord(order.formatSlug);
-    const reservation = this.data.inventoryReservations.find((item) => item.stripeSessionId === order.stripeSessionId && item.status === "active");
+    const reservation = this.data.inventoryReservations.find((item) => item.status === "active" && (
+      (order.stripeSessionId && item.stripeSessionId === order.stripeSessionId) ||
+      (order.paypalOrderId && item.paypalOrderId === order.paypalOrderId)
+    ));
     const quantity = safeQuantity(order.quantity);
     if (inventory) {
       inventory.unitsSold = Math.max(0, Number(inventory.unitsSold) || 0) + quantity;
@@ -802,8 +818,69 @@ export class JsonStore {
     return { duplicate: false, order };
   }
 
-  publicOrder(stripeSessionId) {
-    const order = this.data.orders.find((item) => item.stripeSessionId === stripeSessionId);
+  async applyPayPalCapture(payload) {
+    const paypalOrderId = String(payload?.id || "");
+    const capture = payload?.purchase_units?.[0]?.payments?.captures?.[0];
+    if (!paypalOrderId || !capture?.id || payload.status !== "COMPLETED" || capture.status !== "COMPLETED") {
+      throw new Error("PayPal payment is not completed.");
+    }
+    let order = this.data.orders.find((item) => item.paypalOrderId === paypalOrderId);
+    if (order?.status === "paid") return { duplicate: true, order: this.publicOrder(paypalOrderId) };
+    const reservation = this.data.inventoryReservations.find((item) => item.paypalOrderId === paypalOrderId && item.status === "active");
+    if (!reservation) throw new Error("The PayPal inventory reservation was not found or has expired.");
+    const format = formats.find((item) => item.slug === reservation.formatSlug);
+    if (!format) throw new Error("The PayPal product format is invalid.");
+    const unit = payload.purchase_units[0];
+    const amount = capture.amount || unit.amount || {};
+    const breakdown = unit.amount?.breakdown || {};
+    const payer = payload.payer || {};
+    const shipping = unit.shipping || {};
+    const now = new Date().toISOString();
+    const update = {
+      provider: "paypal",
+      paypalOrderId,
+      paypalCaptureId: capture.id,
+      status: "paid",
+      paymentStatus: "paid",
+      formatSlug: format.slug,
+      formatName: format.name,
+      sku: format.sku,
+      quantity: reservation.quantity,
+      amountSubtotal: paypalCents(breakdown.item_total?.value),
+      amountShipping: paypalCents(breakdown.shipping?.value) || 0,
+      amountTax: paypalCents(breakdown.tax_total?.value) || 0,
+      amountTotal: paypalCents(amount.value),
+      currency: String(amount.currency_code || "").toUpperCase(),
+      customer: {
+        name: [payer.name?.given_name, payer.name?.surname].filter(Boolean).join(" ") || shipping.name?.full_name || "",
+        email: payer.email_address || "",
+        phone: payer.phone?.phone_number?.national_number || ""
+      },
+      shipping: shipping.address ? { name: shipping.name?.full_name || "", address: {
+        line1: shipping.address.address_line_1 || "", line2: shipping.address.address_line_2 || "",
+        city: shipping.address.admin_area_2 || "", state: shipping.address.admin_area_1 || "",
+        postalCode: shipping.address.postal_code || "", country: shipping.address.country_code || ""
+      } } : null,
+      livemode: Boolean(payload.livemode),
+      updatedAt: now
+    };
+    if (order) Object.assign(order, update);
+    else {
+      order = { id: randomUUID(), orderNumber: `SR-${now.slice(0, 10).replaceAll("-", "")}-${randomUUID().slice(0, 6).toUpperCase()}`, refundedAmount: 0, fulfillmentStatus: "unfulfilled", assignedTo: "", fulfillmentUpdatedAt: null, createdAt: now, ...update };
+      this.data.orders.unshift(order);
+    }
+    this.#completeInventoryForOrder(order, now);
+    this.#queueZohoOrder(order, now);
+    let payment = this.data.payments.find((item) => item.paypalCaptureId === capture.id);
+    const paymentUpdate = { provider: "paypal", paypalOrderId, paypalCaptureId: capture.id, orderId: order.id, orderNumber: order.orderNumber, status: "paid", amount: order.amountTotal, amountRefunded: 0, currency: order.currency, customer: order.customer, livemode: Boolean(payload.livemode), lastEventType: "PAYMENT.CAPTURE.COMPLETED", updatedAt: now };
+    if (payment) Object.assign(payment, paymentUpdate);
+    else this.data.payments.unshift({ id: randomUUID(), createdAt: now, ...paymentUpdate });
+    await this.persist();
+    return { duplicate: false, order: this.publicOrder(paypalOrderId) };
+  }
+
+  publicOrder(paymentReference) {
+    const order = this.data.orders.find((item) => item.stripeSessionId === paymentReference || item.paypalOrderId === paymentReference);
     if (!order) return null;
     return {
       orderNumber: order.orderNumber,

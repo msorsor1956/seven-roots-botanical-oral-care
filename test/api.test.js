@@ -37,9 +37,39 @@ const paymentMock = () => ({
     assert.ok(requestId);
     return { id: "cs_test_checkout123", url: "https://checkout.stripe.com/c/pay/test-session" };
   },
+  async retrievePrice(slug) {
+    assert.equal(slug, "daily-ritual");
+    return { id: "price_daily", unit_amount: 1800, currency: "usd" };
+  },
   async constructWebhookEvent(rawBody, signature) {
     if (signature !== "test-signature") throw new Error("Invalid signature");
     return JSON.parse(rawBody.toString("utf8"));
+  }
+});
+
+const paypalMock = () => ({
+  configured: true,
+  async createOrder({ format, quantity, unitAmount, currency, requestId }) {
+    assert.equal(format.slug, "daily-ritual");
+    assert.equal(quantity, 2);
+    assert.equal(unitAmount, 1800);
+    assert.equal(currency, "usd");
+    assert.ok(requestId);
+    return { id: "5O190127TN364715T", url: "https://www.sandbox.paypal.com/checkoutnow?token=5O190127TN364715T" };
+  },
+  async captureOrder(orderId) {
+    assert.equal(orderId, "5O190127TN364715T");
+    return {
+      id: orderId,
+      status: "COMPLETED",
+      livemode: false,
+      payer: { name: { given_name: "Amina", surname: "Johnson" }, email_address: "amina@example.com" },
+      purchase_units: [{
+        amount: { currency_code: "USD", value: "36.00", breakdown: { item_total: { value: "36.00" }, shipping: { value: "0.00" } } },
+        shipping: { name: { full_name: "Amina Johnson" }, address: { address_line_1: "100 Main St", admin_area_2: "Indianapolis", admin_area_1: "IN", postal_code: "46201", country_code: "US" } },
+        payments: { captures: [{ id: "3C679366HH908993F", status: "COMPLETED", amount: { currency_code: "USD", value: "36.00" } }] }
+      }]
+    };
   }
 });
 
@@ -240,6 +270,39 @@ test("creates a server-priced Stripe Checkout Session", async () => {
     assert.equal(checkout.status, 201);
     assert.match(payload.data.url, /^https:\/\/checkout\.stripe\.com\//u);
   }, { payments: paymentMock() });
+});
+
+test("creates and captures an idempotent PayPal order in the shared order ledger", async () => {
+  await withServer(async (baseUrl) => {
+    const create = await fetch(`${baseUrl}/api/v1/paypal/orders`, {
+      method: "POST",
+      headers: { "content-type": "application/json", "x-request-id": "paypal-order-1" },
+      body: JSON.stringify({ formatSlug: "daily-ritual", quantity: 2, amount: 1 })
+    });
+    const created = await create.json();
+    assert.equal(create.status, 201);
+    assert.equal(created.data.id, "5O190127TN364715T");
+    assert.match(created.data.url, /^https:\/\/www\.sandbox\.paypal\.com\//u);
+
+    for (let attempt = 0; attempt < 2; attempt += 1) {
+      const capture = await fetch(`${baseUrl}/api/v1/paypal/orders/5O190127TN364715T/capture`, { method: "POST" });
+      const captured = await capture.json();
+      assert.equal(capture.status, 200);
+      assert.equal(captured.data.order.status, "paid");
+      assert.equal(captured.data.order.amountTotal, 3600);
+    }
+
+    const confirmation = await fetch(`${baseUrl}/api/v1/orders/lookup?paypal_order_id=5O190127TN364715T`);
+    assert.equal(confirmation.status, 200);
+    assert.equal((await confirmation.json()).data.formatName, "Daily Ritual");
+
+    const payments = await fetch(`${baseUrl}/api/v1/admin/payments`, { headers: { authorization: "Bearer test-admin-key" } });
+    const paymentItems = (await payments.json()).data;
+    assert.equal(paymentItems.length, 1);
+    assert.equal(paymentItems[0].provider, "paypal");
+    assert.equal(paymentItems[0].paypalCaptureId, "3C679366HH908993F");
+    assert.equal(paymentItems[0].livemode, false);
+  }, { payments: paymentMock(), paypal: paypalMock() });
 });
 
 test("verifies Stripe webhooks and stores an idempotent order", async () => {
