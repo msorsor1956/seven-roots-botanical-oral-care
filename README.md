@@ -1,6 +1,6 @@
 # SEVEN ROOTS | African Botanical Oral Care
 
-Production-ready storefront, Stripe payment flow, and backend for the **SEVEN ROOTS** collection.
+Production-ready storefront, Stripe and PayPal payment flows, and backend for the **SEVEN ROOTS** collection.
 
 ## Live frontend
 
@@ -22,7 +22,7 @@ The Railway deployment serves the frontend and API from one Node process. The Gi
 - Drag, swipe, keyboard, zoom, reset, and auto-rotation controls
 - Reduced-motion and static-image fallbacks
 - Accessible pre-launch signup connected to the API
-- Server-priced purchase dialog with Stripe-hosted Checkout
+- Server-priced purchase dialog with Stripe-hosted Checkout and PayPal
 - Branded order-confirmation page with signed-status polling, customer order number, and shipping breakdown
 - Trade, sourcing, retail, and press inquiry form
 
